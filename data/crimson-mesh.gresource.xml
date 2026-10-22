@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+	<gresource prefix="/io/github/CrimsonOrg/CrimsonMesh">
+		<file>style.css</file>
+		<file alias="common.css">../subprojects/crimson-core/data/common.css</file>
+		<file>icons/scalable/apps/io.github.CrimsonOrg.CrimsonMesh.svg</file>
+		<file>icons/scalable/actions/crimson-background-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-grid-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-skeleton-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-textures-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-wireframe-symbolic.svg</file>
+	</gresource>
+</gresources>

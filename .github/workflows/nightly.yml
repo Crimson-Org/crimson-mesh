@@ -1,0 +1,17 @@
+name: Nightly build
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  nightly:
+    uses: Crimson-Org/crimson-core/.github/workflows/nightly.yml@main
+    with:
+      title: Crimson Mesh
+      packages: gtk4-devel libadwaita-devel assimp-devel libepoxy-devel gdk-pixbuf-devel
+      arch-packages: gtk4 libadwaita assimp libepoxy gdk-pixbuf2

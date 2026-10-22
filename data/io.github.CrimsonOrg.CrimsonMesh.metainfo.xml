@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+	<id>io.github.CrimsonOrg.CrimsonMesh</id>
+	<name>Crimson Mesh</name>
+	<summary>View 3D models and their animations</summary>
+	<metadata_license>CC0-1.0</metadata_license>
+	<project_license>LicenseRef-proprietary</project_license>
+	<description>
+		<p>A 3D model viewer that opens glTF, FBX, OBJ, STL and dozens of other formats, with textures, skeletons and animations.</p>
+	</description>
+	<developer id="io.github.CrimsonOrg">
+		<name>Crimson</name>
+	</developer>
+	<releases>
+		<release version="0.1.0" date="2026-10-21"/>
+	</releases>
+	<launchable type="desktop-id">io.github.CrimsonOrg.CrimsonMesh.desktop</launchable>
+	<provides>
+		<binary>crimson-mesh</binary>
+	</provides>
+	<content_rating type="oars-1.1"/>
+</component>
