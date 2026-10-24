@@ -517,6 +517,7 @@ static gboolean close_window(GtkWindow *gtk_window, Window *window) {
 	WindowGeometry geometry;
 	read_window_geometry(gtk_window, &geometry);
 	save_window_state(&geometry);
+	hide_closing_window(gtk_window);
 	return GDK_EVENT_PROPAGATE;
 }
 
