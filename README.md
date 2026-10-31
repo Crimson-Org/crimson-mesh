@@ -28,7 +28,7 @@ Look around, then fly through it.</p>
 A model sent by a friend or found online should open with a double click, without starting a 3D editor.\
 Crimson Mesh shows it textured, lit and moving at once.
 
-## Features
+## About
 
 ### The common formats
 
