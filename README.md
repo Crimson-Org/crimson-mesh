@@ -19,6 +19,10 @@ Look around, then fly through it.</p>
   </a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/Crimson-Org/crimson-mesh/releases/latest"><b>Download Here!</b></a>
+</p>
+
 ## Why
 
 A model sent by a friend or found online should open with a double click, without starting a 3D editor.\
@@ -36,7 +40,7 @@ Dropping a model on the window opens it there, and each extra file gets a window
 
 Drag with the left button to orbit, and with the middle button or Shift to pan.\
 Drag with the right button to turn your head, and W, A, S and D fly with Q and E for down and up.\
-Shift flies at 4× speed, the wheel zooms and F frames the model again.\
+Shift flies four times as fast, the wheel zooms and F frames the model again.\
 Settings (Ctrl+,) change the mouse and fly speeds.
 
 ### Seeing how it is built
@@ -60,7 +64,8 @@ Charcoal, Midnight, Studio Grey, Light and Black backgrounds cycle with B, and b
 You need a [C compiler](https://gcc.gnu.org/), [make](https://www.gnu.org/software/make/), [pkg-config](https://www.freedesktop.org/wiki/Software/pkg-config/) and the development files for [GTK4](https://gtk.org) 4.14, [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/) 1.6, Assimp 5.1 and [libepoxy](https://github.com/anholt/libepoxy).\
 On [openSUSE](https://www.opensuse.org/) these come from `sudo zypper install gcc make pkg-config gtk4-devel libadwaita-devel assimp-devel libepoxy-devel`.
 
-Clone it with `git clone --recurse-submodules` so the shared Crimson Core code comes along.\
-`sh .crimson-build/install.sh` installs it and `sh .crimson-build/uninstall.sh` removes it.\
-`sh .crimson-build/run.sh` builds and starts it, and `sh .crimson-build/archive.sh` writes a tar.gz to `dist/`.\
-`sh .crimson-build/appimage.sh` writes an [AppImage](https://appimage.org/) to `dist/` on [Arch Linux](https://archlinux.org/).
+Steps:
+ 1. Clone using `git clone --recurse-submodules https://github.com/Crimson-Org/crimson-mesh`
+ 2. Run `sh .crimson-build/install.sh`
+
+`sh .crimson-build/uninstall.sh` removes it again.
