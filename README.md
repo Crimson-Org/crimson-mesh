@@ -5,7 +5,7 @@
 <h1 align="center">Crimson Mesh</h1>
 <p align="center">A Linux 3D model viewer that plays skeletons and animations, not just meshes.<br>
 Opens <a href="https://www.khronos.org/gltf/">glTF</a>, FBX, OBJ, STL and many other formats.<br>
-Look around, then fly through it.</p>
+Look around, then fly through the model.</p>
 
 <p align="center">
   <a href="https://gtk.org">
@@ -26,7 +26,7 @@ Look around, then fly through it.</p>
 ## Why
 
 A model sent by a friend or found online should open with a double click, without starting a 3D editor.\
-Crimson Mesh shows it textured, lit and moving at once.
+Crimson Mesh shows the model with textures, lighting and animation at once.
 
 ## About
 
@@ -38,7 +38,7 @@ glTF, FBX, OBJ, Collada, STL, PLY, 3DS and many older formats open with their te
 
 Orbit, pan and zoom with the mouse, or fly through the model.
 
-### How it is built
+### How a model is built
 
 Show the wireframe or the skeleton, and models with only a rig show their bones by themselves.
 
@@ -59,4 +59,4 @@ Steps:
  1. Clone using `git clone --recurse-submodules https://github.com/Crimson-Org/crimson-mesh`
  2. Run `sh .crimson-build/install.sh`
 
-`sh .crimson-build/uninstall.sh` removes it again.
+`sh .crimson-build/uninstall.sh` uninstalls Crimson Mesh.
