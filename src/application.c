@@ -1,6 +1,6 @@
 #include <adwaita.h>
 
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "application.h"
 #include "settings-dialog.h"
 #include "window.h"
