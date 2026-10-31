@@ -1,6 +1,6 @@
 #pragma once
 
-#include "math3d.h"
+#include "render/math3d.h"
 
 /* The eye circles a target point, so orbiting, panning and flying all move the same two things */
 typedef struct {

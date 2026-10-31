@@ -1,10 +1,10 @@
 #include <math.h>
 
-#include "animation.h"
-#include "camera.h"
-#include "renderer.h"
-#include "view-options.h"
-#include "viewer.h"
+#include "model/animation.h"
+#include "render/camera.h"
+#include "render/renderer.h"
+#include "window/view-options.h"
+#include "render/viewer.h"
 
 /* Shaders need OpenGL 3.3 or OpenGL ES 3.0, matching what GTK draws the window with */
 #define GL_MAJOR 3
@@ -132,7 +132,7 @@ static void realize_area(GtkGLArea *area, Viewer *viewer) {
 	gdk_gl_context_get_version(gtk_gl_area_get_context(area), &major, &minor);
 	int needed_major = is_es ? ES_MAJOR : GL_MAJOR, needed_minor = is_es ? ES_MINOR : GL_MINOR;
 	GError *error = NULL;
-	if (major * 10 + minor < needed_major * 10 + needed_minor) {
+	if (major < needed_major || (major == needed_major && minor < needed_minor)) {
 		error = g_error_new(GDK_GL_ERROR, GDK_GL_ERROR_NOT_AVAILABLE, "OpenGL %s%d.%d is needed, and %d.%d was found",
 			is_es ? "ES " : "", needed_major, needed_minor, major, minor);
 		gtk_gl_area_set_error(area, error);

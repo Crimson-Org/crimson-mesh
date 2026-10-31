@@ -1,5 +1,5 @@
 #include "common/key-store.h"
-#include "state.h"
+#include "app/state.h"
 
 #define STATE_FILE "window.ini"
 #define DEFAULT_WIDTH 1100

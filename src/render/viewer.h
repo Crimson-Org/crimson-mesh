@@ -2,7 +2,7 @@
 
 #include <gtk/gtk.h>
 
-#include "model.h"
+#include "model/model.h"
 
 typedef struct Viewer Viewer;
 

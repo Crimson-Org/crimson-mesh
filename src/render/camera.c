@@ -1,7 +1,7 @@
 #include <glib.h>
 #include <math.h>
 
-#include "camera.h"
+#include "render/camera.h"
 
 #define FIELD_OF_VIEW (G_PI / 4)
 /* The model's first view comes from the front right and a little above, the angle product photos use */
@@ -12,11 +12,14 @@
 #define ZOOM_STEP 0.12f
 /* The eye keeps at least this share of the model from the target, or zooming would stop */
 #define NEAREST_SHARE 0.002f
+/* The near plane sits this share of the way to the model, and the far plane this many model sizes behind it */
+#define NEAR_PLANE_SHARE 0.01f
+#define FAR_PLANE_SIZES 20
 
 
 void frame_camera(Camera *camera, Vector3 minimum, Vector3 maximum) {
 	Vector3 size = subtract_vectors(maximum, minimum);
-	float radius = fmaxf(get_vector_length(size) / 2, 1e-4f);
+	float radius = fmaxf(get_vector_length(size) / 2, SMALLEST_SIZE);
 	camera->target = scale_vector(add_vectors(minimum, maximum), 0.5f);
 	camera->distance = radius / sinf((float)FIELD_OF_VIEW / 2) * FRAME_MARGIN;
 	camera->yaw = (float)FRAME_YAW;
@@ -88,7 +91,7 @@ Matrix4 get_view_matrix(const Camera *camera) {
 
 /* The near plane follows the eye's distance so close-ups keep their depth precision */
 Matrix4 get_projection_matrix(const Camera *camera, float aspect) {
-	float near = fmaxf(camera->distance * 0.01f, camera->scale * 1e-4f);
-	float far = camera->distance + camera->scale * 20;
+	float near = fmaxf(camera->distance * NEAR_PLANE_SHARE, camera->scale * SMALLEST_SIZE);
+	float far = camera->distance + camera->scale * FAR_PLANE_SIZES;
 	return get_perspective_matrix((float)FIELD_OF_VIEW, aspect, near, far);
 }

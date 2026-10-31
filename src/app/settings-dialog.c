@@ -1,8 +1,8 @@
 #include <adwaita.h>
 
 #include "lang/en.h"
-#include "settings-dialog.h"
-#include "view-options.h"
+#include "app/settings-dialog.h"
+#include "window/view-options.h"
 
 #define SPEED_STEP 10
 #define DIALOG_WIDTH 520

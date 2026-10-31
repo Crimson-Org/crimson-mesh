@@ -1,5 +1,5 @@
 #include "common/key-store.h"
-#include "view-options.h"
+#include "window/view-options.h"
 
 #define SETTINGS_FILE "settings.ini"
 #define SETTINGS_GROUP "view"

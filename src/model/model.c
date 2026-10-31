@@ -8,7 +8,7 @@
 #include <gdk/gdk.h>
 #include <string.h>
 
-#include "model.h"
+#include "model/model.h"
 
 /* Files that leave the timing out are played at the frame rate most exporters assume */
 #define DEFAULT_TICKS_PER_SECOND 25.0
@@ -66,7 +66,7 @@ static gboolean read_texture_pixels(GdkTexture *texture, ModelTexture *pixels) {
 	g_autoptr(GBytes) bytes = gdk_texture_downloader_download_bytes(downloader, &stride);
 	pixels->width = gdk_texture_get_width(texture);
 	pixels->height = gdk_texture_get_height(texture);
-	gsize row = (gsize)pixels->width * 4;
+	gsize row = (gsize)pixels->width * COLOUR_CHANNELS;
 	if (stride == row) {
 		pixels->pixels = g_bytes_ref(bytes);
 		return TRUE;
@@ -88,7 +88,7 @@ static gboolean read_pixbuf_pixels(GdkPixbuf *source, ModelTexture *pixels) {
 	g_object_unref(source);
 	pixels->width = gdk_pixbuf_get_width(pixbuf);
 	pixels->height = gdk_pixbuf_get_height(pixbuf);
-	gsize row = (gsize)pixels->width * 4, stride = (gsize)gdk_pixbuf_get_rowstride(pixbuf);
+	gsize row = (gsize)pixels->width * COLOUR_CHANNELS, stride = (gsize)gdk_pixbuf_get_rowstride(pixbuf);
 	const guint8 *source_pixels = gdk_pixbuf_read_pixels(pixbuf);
 	guint8 *packed = g_malloc(row * (gsize)pixels->height);
 	for (int line = 0; line < pixels->height; line++)
@@ -116,10 +116,10 @@ static gboolean decode_texture_file(GFile *file, ModelTexture *pixels) {
 /* Raw embedded texels are stored blue first, as Assimp keeps them */
 static gboolean read_raw_texels(const struct aiTexture *texture, ModelTexture *pixels) {
 	gsize count = (gsize)texture->mWidth * texture->mHeight;
-	guint8 *rgba = g_malloc(count * 4);
+	guint8 *rgba = g_malloc(count * COLOUR_CHANNELS);
 	for (gsize index = 0; index < count; index++) {
 		const struct aiTexel *texel = &texture->pcData[index];
-		guint8 *pixel = rgba + index * 4;
+		guint8 *pixel = rgba + index * COLOUR_CHANNELS;
 		pixel[0] = texel->r;
 		pixel[1] = texel->g;
 		pixel[2] = texel->b;
@@ -127,7 +127,7 @@ static gboolean read_raw_texels(const struct aiTexture *texture, ModelTexture *p
 	}
 	pixels->width = (int)texture->mWidth;
 	pixels->height = (int)texture->mHeight;
-	pixels->pixels = g_bytes_new_take(rgba, count * 4);
+	pixels->pixels = g_bytes_new_take(rgba, count * COLOUR_CHANNELS);
 	return TRUE;
 }
 
@@ -199,7 +199,7 @@ static void add_materials(Model *model, const struct aiScene *scene, GFile *fold
 		float opacity = 1;
 		unsigned int count = 1;
 		if (aiGetMaterialFloatArray(source, AI_MATKEY_OPACITY, &opacity, &count) == aiReturn_SUCCESS)
-			material.colour[3] *= opacity;
+			material.colour[ALPHA_CHANNEL] *= opacity;
 		material.texture = find_material_texture(model, paths, scene, folder, source);
 		g_array_append_val(model->materials, material);
 	}
@@ -254,9 +254,9 @@ static int compare_edges(gconstpointer a, gconstpointer b) {
 static void add_mesh_edges(ModelMesh *mesh) {
 	guint64 *keys = g_new(guint64, mesh->index_count);
 	guint key_count = 0;
-	for (guint triangle = 0; triangle + 2 < mesh->index_count; triangle += 3) {
-		for (guint corner = 0; corner < 3; corner++) {
-			uint32_t from = mesh->indices[triangle + corner], to = mesh->indices[triangle + (corner + 1) % 3];
+	for (guint triangle = 0; triangle + TRIANGLE_CORNERS <= mesh->index_count; triangle += TRIANGLE_CORNERS) {
+		for (guint corner = 0; corner < TRIANGLE_CORNERS; corner++) {
+			uint32_t from = mesh->indices[triangle + corner], to = mesh->indices[triangle + (corner + 1) % TRIANGLE_CORNERS];
 			keys[key_count++] = ((guint64)MIN(from, to) << 32) | MAX(from, to);
 		}
 	}
@@ -292,16 +292,16 @@ static void add_mesh(Model *model, GHashTable *names, GHashTable *places, const 
 		else
 			vertex->colour[0] = vertex->colour[1] = vertex->colour[2] = vertex->colour[3] = 1;
 	}
-	GArray *indices = g_array_sized_new(FALSE, FALSE, sizeof(uint32_t), source->mNumFaces * 3);
+	GArray *indices = g_array_sized_new(FALSE, FALSE, sizeof(uint32_t), source->mNumFaces * TRIANGLE_CORNERS);
 	for (guint face = 0; face < source->mNumFaces; face++) {
-		if (source->mFaces[face].mNumIndices == 3)
-			g_array_append_vals(indices, source->mFaces[face].mIndices, 3);
+		if (source->mFaces[face].mNumIndices == TRIANGLE_CORNERS)
+			g_array_append_vals(indices, source->mFaces[face].mIndices, TRIANGLE_CORNERS);
 	}
 	mesh.index_count = indices->len;
 	mesh.indices = (uint32_t *)g_array_free(indices, FALSE);
 	add_mesh_edges(&mesh);
 	add_mesh_joints(model, names, places, source, &mesh);
-	model->triangle_count += mesh.index_count / 3;
+	model->triangle_count += mesh.index_count / TRIANGLE_CORNERS;
 	model->vertex_count += mesh.vertex_count;
 	g_array_append_val(model->meshes, mesh);
 }

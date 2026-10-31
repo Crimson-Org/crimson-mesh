@@ -3,17 +3,18 @@
 #include <gio/gio.h>
 #include <stdint.h>
 
-#include "math3d.h"
+#include "render/math3d.h"
 
 /* Each vertex bends with up to this many joints */
 #define JOINTS_PER_VERTEX 4
+#define TRIANGLE_CORNERS 3
 
 /* One corner of a triangle as the renderer uploads it */
 typedef struct {
-	float position[3];
-	float normal[3];
-	float uv[2];
-	float colour[4];
+	float position[POINT_COMPONENTS];
+	float normal[POINT_COMPONENTS];
+	float uv[TEXTURE_COORDINATES];
+	float colour[COLOUR_CHANNELS];
 	uint16_t joints[JOINTS_PER_VERTEX];
 	float weights[JOINTS_PER_VERTEX];
 } ModelVertex;
@@ -38,7 +39,7 @@ typedef struct {
 
 /* How a material colours its triangles, with texture minus one when it has none */
 typedef struct {
-	float colour[4];
+	float colour[COLOUR_CHANNELS];
 	int texture;
 } ModelMaterial;
 
