@@ -1,6 +1,6 @@
 #include <string.h>
 
-#include "../lang/en.h"
+#include "lang/en.h"
 #include "common/loading.h"
 #include "common/log.h"
 #include "common/startup.h"
