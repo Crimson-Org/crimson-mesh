@@ -1,7 +1,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "math3d.h"
+#include "render/math3d.h"
 
 /* Quaternions closer than this are blended linearly, since the angle between them is too small to divide */
 #define SLERP_LINEAR_LIMIT 0.9995f
@@ -90,12 +90,12 @@ Matrix4 get_identity_matrix(void) {
 
 Matrix4 multiply_matrices(const Matrix4 *a, const Matrix4 *b) {
 	Matrix4 product;
-	for (int column = 0; column < 4; column++) {
-		for (int row = 0; row < 4; row++) {
+	for (int column = 0; column < MATRIX_ORDER; column++) {
+		for (int row = 0; row < MATRIX_ORDER; row++) {
 			float sum = 0;
-			for (int index = 0; index < 4; index++)
-				sum += a->values[index * 4 + row] * b->values[column * 4 + index];
-			product.values[column * 4 + row] = sum;
+			for (int index = 0; index < MATRIX_ORDER; index++)
+				sum += a->values[index * MATRIX_ORDER + row] * b->values[column * MATRIX_ORDER + index];
+			product.values[column * MATRIX_ORDER + row] = sum;
 		}
 	}
 	return product;
@@ -154,12 +154,12 @@ Vector3 get_matrix_position(const Matrix4 *matrix) {
 
 
 /* The inverse transpose of the upper 3x3, which keeps normals upright under uneven scaling */
-void get_normal_matrix(const Matrix4 *matrix, float normal[9]) {
+void get_normal_matrix(const Matrix4 *matrix, float normal[NORMAL_MATRIX_VALUES]) {
 	const float *m = matrix->values;
 	float a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], i = m[10];
 	float determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
 	if (fabsf(determinant) < 1e-12f) {
-		float identity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+		float identity[NORMAL_MATRIX_VALUES] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 		memcpy(normal, identity, sizeof(identity));
 		return;
 	}

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "model.h"
+#include "model/model.h"
 
 /* Places each node at the time in seconds, or in the resting pose without an animation */
 void pose_model(const Model *model, const ModelAnimation *animation, float time, Matrix4 *globals);

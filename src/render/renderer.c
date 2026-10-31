@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <string.h>
 
-#include "renderer.h"
+#include "render/renderer.h"
 
 #define SAMPLES 4
 /* Each upload step stops after this long, so a large model cannot delay a frame */
@@ -22,6 +22,17 @@
 #define LIGHT_COUNT 3
 #define TEXTURE_UNIT_BASE 0
 #define TEXTURE_UNIT_JOINTS 1
+/* Colours without alpha, such as lights and the background */
+#define RGB_CHANNELS 3
+#define SHADER_LOG_BYTES 1024
+/* The grid spans a whole power of ten, with every fifth line strong and the rest faint */
+#define GRID_SCALE_BASE 10
+#define MAJOR_GRID_EVERY 5
+#define MINOR_GRID_STRENGTH 0.45f
+/* Each grid step draws a line across each axis, two ends apiece */
+#define GRID_LINE_ENDS 4
+/* Joint matrices travel as a float texture, one texel per matrix column */
+#define JOINT_TEXELS MATRIX_ORDER
 
 /* The parts of a shader program the renderer sets each frame */
 typedef struct {
@@ -53,8 +64,8 @@ typedef struct {
 
 /* A line or point with its own colour, for the grid and the skeleton */
 typedef struct {
-	float position[3];
-	float colour[4];
+	float position[POINT_COMPONENTS];
+	float colour[COLOUR_CHANNELS];
 } LineVertex;
 
 struct Renderer {
@@ -80,15 +91,15 @@ struct Renderer {
 
 /* Light from three lamps and the sky, all in world directions except the headlight, which follows the eye */
 typedef struct {
-	float directions[LIGHT_COUNT][3];
-	float colours[LIGHT_COUNT][3];
-	float sky[3], ground[3];
+	float directions[LIGHT_COUNT][POINT_COMPONENTS];
+	float colours[LIGHT_COUNT][RGB_CHANNELS];
+	float sky[RGB_CHANNELS], ground[RGB_CHANNELS];
 	gboolean is_view_relative, is_lit;
 } LightingPreset;
 
 typedef struct {
-	float top[3], bottom[3];
-	float grid[4], wire[4];
+	float top[RGB_CHANNELS], bottom[RGB_CHANNELS];
+	float grid[COLOUR_CHANNELS], wire[COLOUR_CHANNELS];
 } BackgroundPreset;
 
 static const LightingPreset LIGHTING_PRESETS[LIGHTING_COUNT] = {
@@ -276,7 +287,7 @@ static GLuint compile_stage(GLenum stage, const char *source, gboolean is_es, GE
 	glGetShaderiv(shader, GL_COMPILE_STATUS, &is_compiled);
 	if (is_compiled)
 		return shader;
-	char log[1024] = "";
+	char log[SHADER_LOG_BYTES] = "";
 	glGetShaderInfoLog(shader, sizeof(log), NULL, log);
 	g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "A shader did not compile: %s", log);
 	glDeleteShader(shader);
@@ -303,7 +314,7 @@ static GLuint link_program(const char *vertex_source, const char *fragment_sourc
 	glGetProgramiv(program, GL_LINK_STATUS, &is_linked);
 	if (is_linked)
 		return program;
-	char log[1024] = "";
+	char log[SHADER_LOG_BYTES] = "";
 	glGetProgramInfoLog(program, sizeof(log), NULL, log);
 	g_set_error(error, G_IO_ERROR, G_IO_ERROR_FAILED, "A shader did not link: %s", log);
 	glDeleteProgram(program);
@@ -356,10 +367,10 @@ static void describe_line_vertices(GLuint array, GLuint buffer) {
 	glBindVertexArray(array);
 	glBindBuffer(GL_ARRAY_BUFFER, buffer);
 	glEnableVertexAttribArray(ATTRIBUTE_POSITION);
-	glVertexAttribPointer(ATTRIBUTE_POSITION, 3, GL_FLOAT, GL_FALSE, sizeof(LineVertex),
+	glVertexAttribPointer(ATTRIBUTE_POSITION, POINT_COMPONENTS, GL_FLOAT, GL_FALSE, sizeof(LineVertex),
 		(void *)offsetof(LineVertex, position));
 	glEnableVertexAttribArray(ATTRIBUTE_COLOUR);
-	glVertexAttribPointer(ATTRIBUTE_COLOUR, 4, GL_FLOAT, GL_FALSE, sizeof(LineVertex),
+	glVertexAttribPointer(ATTRIBUTE_COLOUR, COLOUR_CHANNELS, GL_FLOAT, GL_FALSE, sizeof(LineVertex),
 		(void *)offsetof(LineVertex, colour));
 	glBindVertexArray(0);
 }
@@ -443,22 +454,22 @@ void free_renderer(Renderer *renderer) {
 /* Twenty lines each way, with stronger lines at each 5th, sized to the power of ten above the model */
 static void build_grid(Renderer *renderer, const Model *model) {
 	Vector3 size = subtract_vectors(model->maximum, model->minimum);
-	float extent = powf(10, ceilf(log10f(fmaxf(fmaxf(size.x, size.z), 1e-4f))));
+	float extent = powf(GRID_SCALE_BASE, ceilf(log10f(fmaxf(fmaxf(size.x, size.z), SMALLEST_SIZE))));
 	float step = extent * 2 / GRID_LINES;
 	float centre_x = roundf((model->minimum.x + model->maximum.x) / 2 / step) * step;
 	float centre_z = roundf((model->minimum.z + model->maximum.z) / 2 / step) * step;
 	float ground = model->minimum.y;
 	GArray *vertices = g_array_new(FALSE, FALSE, sizeof(LineVertex));
 	for (int line = -GRID_LINES / 2; line <= GRID_LINES / 2; line++) {
-		float strength = line % 5 == 0 ? 1.0f : 0.45f;
+		float strength = line % MAJOR_GRID_EVERY == 0 ? 1.0f : MINOR_GRID_STRENGTH;
 		float offset = (float)line * step;
-		LineVertex ends[4] = {
+		LineVertex ends[GRID_LINE_ENDS] = {
 			{{centre_x + offset, ground, centre_z - extent}, {1, 1, 1, strength}},
 			{{centre_x + offset, ground, centre_z + extent}, {1, 1, 1, strength}},
 			{{centre_x - extent, ground, centre_z + offset}, {1, 1, 1, strength}},
 			{{centre_x + extent, ground, centre_z + offset}, {1, 1, 1, strength}},
 		};
-		g_array_append_vals(vertices, ends, 4);
+		g_array_append_vals(vertices, ends, GRID_LINE_ENDS);
 	}
 	renderer->grid_count = (int)vertices->len;
 	glBindBuffer(GL_ARRAY_BUFFER, renderer->grid_buffer);
@@ -483,13 +494,13 @@ static void describe_mesh_vertices(GLuint vertices) {
 	glBindBuffer(GL_ARRAY_BUFFER, vertices);
 	GLsizei stride = sizeof(ModelVertex);
 	glEnableVertexAttribArray(ATTRIBUTE_POSITION);
-	glVertexAttribPointer(ATTRIBUTE_POSITION, 3, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(ModelVertex, position));
+	glVertexAttribPointer(ATTRIBUTE_POSITION, POINT_COMPONENTS, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(ModelVertex, position));
 	glEnableVertexAttribArray(ATTRIBUTE_NORMAL);
-	glVertexAttribPointer(ATTRIBUTE_NORMAL, 3, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(ModelVertex, normal));
+	glVertexAttribPointer(ATTRIBUTE_NORMAL, POINT_COMPONENTS, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(ModelVertex, normal));
 	glEnableVertexAttribArray(ATTRIBUTE_UV);
-	glVertexAttribPointer(ATTRIBUTE_UV, 2, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(ModelVertex, uv));
+	glVertexAttribPointer(ATTRIBUTE_UV, TEXTURE_COORDINATES, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(ModelVertex, uv));
 	glEnableVertexAttribArray(ATTRIBUTE_COLOUR);
-	glVertexAttribPointer(ATTRIBUTE_COLOUR, 4, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(ModelVertex, colour));
+	glVertexAttribPointer(ATTRIBUTE_COLOUR, COLOUR_CHANNELS, GL_FLOAT, GL_FALSE, stride, (void *)offsetof(ModelVertex, colour));
 	glEnableVertexAttribArray(ATTRIBUTE_JOINTS);
 	glVertexAttribIPointer(ATTRIBUTE_JOINTS, JOINTS_PER_VERTEX, GL_UNSIGNED_SHORT, stride,
 		(void *)offsetof(ModelVertex, joints));
@@ -597,14 +608,14 @@ static void draw_background(Renderer *renderer, const BackgroundPreset *preset) 
 	glUniform3fv(renderer->background.top, 1, preset->top);
 	glUniform3fv(renderer->background.bottom, 1, preset->bottom);
 	glBindVertexArray(renderer->empty_array);
-	glDrawArrays(GL_TRIANGLES, 0, 3);
+	glDrawArrays(GL_TRIANGLES, 0, TRIANGLE_CORNERS);
 }
 
 
 static void set_lighting(const Renderer *renderer, const RenderFrame *frame) {
 	const SurfaceShader *surface = &renderer->surface;
 	const LightingPreset *preset = &LIGHTING_PRESETS[frame->options->lighting];
-	float directions[LIGHT_COUNT][3];
+	float directions[LIGHT_COUNT][POINT_COMPONENTS];
 	memcpy(directions, preset->directions, sizeof(directions));
 	if (preset->is_view_relative) {
 		directions[0][0] = frame->forward.x;
@@ -625,8 +636,8 @@ static void upload_joints(Renderer *renderer, const RenderFrame *frame) {
 	Matrix4 identity = get_identity_matrix();
 	glActiveTexture(GL_TEXTURE0 + TEXTURE_UNIT_JOINTS);
 	glBindTexture(GL_TEXTURE_2D, renderer->joint_texture);
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, (GLsizei)MAX(count, 1), 0, GL_RGBA, GL_FLOAT,
+	glPixelStorei(GL_UNPACK_ALIGNMENT, sizeof(float));
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, JOINT_TEXELS, (GLsizei)MAX(count, 1), 0, GL_RGBA, GL_FLOAT,
 		count ? frame->joints->values : identity.values);
 }
 
@@ -642,7 +653,7 @@ static void draw_mesh(const Renderer *renderer, const RenderFrame *frame, guint 
 		&& (guint)material->texture < renderer->uploaded_textures;
 	Matrix4 identity = get_identity_matrix();
 	const Matrix4 *model = mesh->is_skinned ? &identity : place;
-	float normal[9];
+	float normal[NORMAL_MATRIX_VALUES];
 	get_normal_matrix(model, normal);
 	glUniformMatrix4fv(surface->model, 1, GL_FALSE, model->values);
 	glUniformMatrix3fv(surface->normal_matrix, 1, GL_FALSE, normal);
@@ -811,6 +822,6 @@ void draw_renderer(Renderer *renderer, const RenderFrame *frame) {
 	glBindTexture(GL_TEXTURE_2D, renderer->resolve_texture);
 	glUniform1i(renderer->copy.image, 0);
 	glBindVertexArray(renderer->empty_array);
-	glDrawArrays(GL_TRIANGLES, 0, 3);
+	glDrawArrays(GL_TRIANGLES, 0, TRIANGLE_CORNERS);
 	glBindVertexArray(0);
 }

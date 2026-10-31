@@ -1,7 +1,7 @@
 #include <math.h>
 #include <string.h>
 
-#include "animation.h"
+#include "model/animation.h"
 
 
 /* The last key at or before the time, found by halving, since long takes hold thousands of keys */

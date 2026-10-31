@@ -1,9 +1,9 @@
 #include <adwaita.h>
 
 #include "lang/en.h"
-#include "application.h"
-#include "settings-dialog.h"
-#include "window.h"
+#include "app/application.h"
+#include "app/settings-dialog.h"
+#include "window/window.h"
 
 
 /* A window still waiting for its first model takes the file, and each other file gets a window of its own */

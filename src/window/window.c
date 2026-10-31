@@ -4,14 +4,18 @@
 #include "common/loading.h"
 #include "common/log.h"
 #include "common/startup.h"
-#include "model.h"
-#include "state.h"
-#include "view-options.h"
-#include "viewer.h"
-#include "window.h"
+#include "model/model.h"
+#include "app/state.h"
+#include "window/view-options.h"
+#include "render/viewer.h"
+#include "window/window.h"
 
 #define TIMELINE_WIDTH 320
 #define TIMELINE_STEP 0.01
+#define ANIMATION_BAR_SPACING 6
+/* Counts are grouped in thousands, such as 12,345 */
+#define DIGITS_PER_GROUP 3
+#define SUFFIX_PATTERN_START "*."
 
 struct Window {
 	GtkWidget *window, *title, *stack, *spinner, *error_page;
@@ -114,7 +118,7 @@ static char *format_count(guint count) {
 	GString *grouped = g_string_new(NULL);
 	gsize length = strlen(digits);
 	for (gsize index = 0; index < length; index++) {
-		if (index > 0 && (length - index) % 3 == 0)
+		if (index > 0 && (length - index) % DIGITS_PER_GROUP == 0)
 			g_string_append_c(grouped, ',');
 		g_string_append_c(grouped, digits[index]);
 	}
@@ -216,8 +220,8 @@ static void choose_files(GSimpleAction *action, GVariant *parameter, gpointer da
 	gtk_file_filter_set_name(models, TEXT_MODELS_FILTER);
 	g_auto(GStrv) patterns = get_model_patterns();
 	for (char **pattern = patterns; *pattern; pattern++)
-		if (g_str_has_prefix(*pattern, "*."))
-			gtk_file_filter_add_suffix(models, *pattern + 2);
+		if (g_str_has_prefix(*pattern, SUFFIX_PATTERN_START))
+			gtk_file_filter_add_suffix(models, *pattern + strlen(SUFFIX_PATTERN_START));
 	g_autoptr(GtkFileFilter) everything = gtk_file_filter_new();
 	gtk_file_filter_set_name(everything, TEXT_ALL_FILTER);
 	gtk_file_filter_add_pattern(everything, "*");
@@ -434,7 +438,7 @@ static GtkWidget *create_animation_bar(Window *window) {
 	g_signal_connect(window->timeline, "value-changed", G_CALLBACK(move_timeline), window);
 	window->time_label = gtk_label_new(NULL);
 	gtk_widget_add_css_class(window->time_label, "numeric");
-	window->animation_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+	window->animation_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, ANIMATION_BAR_SPACING);
 	gtk_widget_add_css_class(window->animation_bar, "toolbar");
 	gtk_widget_add_css_class(window->animation_bar, "osd");
 	gtk_widget_add_css_class(window->animation_bar, "animation-bar");

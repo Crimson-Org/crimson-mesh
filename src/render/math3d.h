@@ -2,6 +2,17 @@
 
 #include <stdbool.h>
 
+/* Sizes of the values a vertex and a matrix hold */
+#define POINT_COMPONENTS 3
+#define COLOUR_CHANNELS 4
+#define ALPHA_CHANNEL 3
+#define TEXTURE_COORDINATES 2
+#define MATRIX_ORDER 4
+/* A normal matrix is the 3x3 corner of a 4x4 matrix */
+#define NORMAL_MATRIX_VALUES 9
+/* Sizes below this count as zero, so a flat or empty model never divides by nothing */
+#define SMALLEST_SIZE 1e-4f
+
 /* A point or direction in space */
 typedef struct {
 	float x, y, z;
@@ -14,7 +25,7 @@ typedef struct {
 
 /* A 4x4 matrix stored column after column, the order OpenGL reads */
 typedef struct {
-	float values[16];
+	float values[MATRIX_ORDER * MATRIX_ORDER];
 } Matrix4;
 
 Vector3 make_vector(float x, float y, float z);
@@ -39,5 +50,5 @@ Matrix4 get_look_at_matrix(Vector3 eye, Vector3 target, Vector3 up);
 Vector3 transform_point(const Matrix4 *matrix, Vector3 point);
 Vector3 get_matrix_position(const Matrix4 *matrix);
 /* The matrix that turns normals the same way the given matrix turns points */
-void get_normal_matrix(const Matrix4 *matrix, float normal[9]);
+void get_normal_matrix(const Matrix4 *matrix, float normal[NORMAL_MATRIX_VALUES]);
 bool is_identity_matrix(const Matrix4 *matrix);

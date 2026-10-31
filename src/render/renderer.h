@@ -2,8 +2,8 @@
 
 #include <glib.h>
 
-#include "model.h"
-#include "view-options.h"
+#include "model/model.h"
+#include "window/view-options.h"
 
 typedef struct Renderer Renderer;
 
