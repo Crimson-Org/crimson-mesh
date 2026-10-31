@@ -9,10 +9,10 @@
 #include "window/view-options.h"
 #include "render/viewer.h"
 #include "window/window.h"
+#include "common/spacing.h"
 
 #define TIMELINE_WIDTH 320
 #define TIMELINE_STEP 0.01
-#define ANIMATION_BAR_SPACING 6
 /* Counts are grouped in thousands, such as 12,345 */
 #define DIGITS_PER_GROUP 3
 #define SUFFIX_PATTERN_START "*."
@@ -438,7 +438,7 @@ static GtkWidget *create_animation_bar(Window *window) {
 	g_signal_connect(window->timeline, "value-changed", G_CALLBACK(move_timeline), window);
 	window->time_label = gtk_label_new(NULL);
 	gtk_widget_add_css_class(window->time_label, "numeric");
-	window->animation_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, ANIMATION_BAR_SPACING);
+	window->animation_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_SMALL);
 	gtk_widget_add_css_class(window->animation_bar, "toolbar");
 	gtk_widget_add_css_class(window->animation_bar, "osd");
 	gtk_widget_add_css_class(window->animation_bar, "animation-bar");
