@@ -23,6 +23,10 @@ Look around, then fly through the model.</p>
   <a href="https://github.com/Crimson-Org/crimson-mesh/releases/latest"><b>Download Here!</b></a>
 </p>
 
+<p align="center">
+  <img src="./demo1.png" alt="Crimson Mesh playing an animated sword">
+</p>
+
 ## Why
 
 A model sent by a friend or found online should open with a double click, without starting a 3D editor.\
