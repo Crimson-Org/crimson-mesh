@@ -84,10 +84,7 @@ static void update_time_label(Window *window, float time) {
  * digits all take the same width */
 static void show_duration(Window *window, float duration) {
 	g_autofree char *longest = g_strdup_printf(TEXT_TIME, duration);
-	g_autoptr(PangoLayout) layout = gtk_widget_create_pango_layout(window->time_label, longest);
-	int width = 0;
-	pango_layout_get_pixel_size(layout, &width, NULL);
-	gtk_widget_set_size_request(window->time_label, width, -1);
+	gtk_label_set_width_chars(GTK_LABEL(window->time_label), (int)g_utf8_strlen(longest, -1));
 	g_autofree char *text = g_strdup_printf(TEXT_DURATION, duration);
 	gtk_label_set_text(GTK_LABEL(window->duration_label), text);
 }
