@@ -140,7 +140,8 @@ export GTK_MINOR="16"
 export ADWAITA_MINOR="7"
 export PKGS="gtk4 >= 4.${GTK_MINOR} libadwaita-1 >= 1.${ADWAITA_MINOR} assimp >= 5.1 epoxy gdk-pixbuf-2.0"
 export LIBS="-lm"
-export DEFINES="-DAPPLICATION_VERSION=\"${VERSION}\" -DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_4_${GTK_MINOR} -DGDK_VERSION_MAX_ALLOWED=GDK_VERSION_4_${GTK_MINOR} -DADW_VERSION_MIN_REQUIRED=ADW_VERSION_1_${ADWAITA_MINOR} -DADW_VERSION_MAX_ALLOWED=ADW_VERSION_1_${ADWAITA_MINOR}"
+export DEFINES="-DAPPLICATION_VERSION=\"${VERSION}\""
+export VERSION_CHECKS="-DGDK_VERSION_MIN_REQUIRED=GDK_VERSION_4_${GTK_MINOR} -DGDK_VERSION_MAX_ALLOWED=GDK_VERSION_4_${GTK_MINOR} -DADW_VERSION_MIN_REQUIRED=ADW_VERSION_1_${ADWAITA_MINOR} -DADW_VERSION_MAX_ALLOWED=ADW_VERSION_1_${ADWAITA_MINOR}"
 export INCLUDES="-Isrc -Isubprojects/crimson-core/src"
 export HEADERS="src/*/*.h subprojects/crimson-core/src/*/*.h subprojects/crimson-core/src/*/*/*.h"
 printf '==> %s\n' 'needs cc, pkg-config, glib-compile-resources'
@@ -156,7 +157,7 @@ glib-compile-resources --sourcedir assets --target build/resources.c --generate-
 printf '==> %s\n' 'glib-compile-resources --sourcedir subprojects/crimson-core/assets --target build/core-resources.c --generate-source subprojects/crimson-core/assets/crimson-core.gresource.xml'
 glib-compile-resources --sourcedir subprojects/crimson-core/assets --target build/core-resources.c --generate-source subprojects/crimson-core/assets/crimson-core.gresource.xml
 printf '==> %s\n' 'each src/*.c src/*/*.c subprojects/crimson-core/src/common/*/*.c'
-crimson_each "src/*.c src/*/*.c subprojects/crimson-core/src/common/*/*.c" "build/obj/{id}.o" 'cc -std=${STD} $WARN $OPT $DEFINES $INCLUDES $(pkg-config --cflags "$PKGS" | sed "s/-I/-isystem /g") -c {from} -o {to}' "${HEADERS}" "src/*.c src/*/*.c subprojects/crimson-core/src/common/*/*.c build/resources.c build/core-resources.c"
+crimson_each "src/*.c src/*/*.c subprojects/crimson-core/src/common/*/*.c" "build/obj/{id}.o" 'cc -std=${STD} $WARN $OPT $DEFINES $VERSION_CHECKS $INCLUDES $(pkg-config --cflags "$PKGS" | sed "s/-I/-isystem /g") -c {from} -o {to}' "${HEADERS}" "src/*.c src/*/*.c subprojects/crimson-core/src/common/*/*.c build/resources.c build/core-resources.c"
 printf '==> %s\n' 'each build/resources.c build/core-resources.c'
 crimson_each "build/resources.c build/core-resources.c" "build/obj/{id}.o" 'cc -std=gnu11 $OPT $(pkg-config --cflags gio-2.0) -c {from} -o {to}' "" "src/*.c src/*/*.c subprojects/crimson-core/src/common/*/*.c build/resources.c build/core-resources.c"
 printf '==> %s\n' 'cc -o build/${PROGRAM} build/obj/*.o $(pkg-config --libs "$PKGS") $LIBS'

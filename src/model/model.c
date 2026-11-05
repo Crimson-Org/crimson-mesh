@@ -474,7 +474,7 @@ static Model *create_model(void) {
 }
 
 
-static Model *read_model(GFile *file, GError **error) {
+static Model *read_model(GFile *file, GCancellable *cancellable, GError **error) {
 	g_autofree char *path = g_file_get_path(file);
 	if (!path) {
 		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, TEXT_NOT_LOCAL);
@@ -485,6 +485,12 @@ static Model *read_model(GFile *file, GError **error) {
 	aiSetImportPropertyInteger(properties, AI_CONFIG_PP_LBW_MAX_WEIGHTS, JOINTS_PER_VERTEX);
 	aiSetImportPropertyFloat(properties, AI_CONFIG_PP_GSN_MAX_SMOOTHING_ANGLE, SMOOTHING_ANGLE);
 	g_mutex_lock(&import_lock);
+	/* A load replaced while it waited for the one before is not read either */
+	if (g_cancellable_set_error_if_cancelled(cancellable, error)) {
+		g_mutex_unlock(&import_lock);
+		aiReleasePropertyStore(properties);
+		return NULL;
+	}
 	const struct aiScene *scene = aiImportFileExWithProperties(path, LOAD_STEPS, NULL, properties);
 	if (!scene || !scene->mRootNode)
 		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, aiGetErrorString());
@@ -520,7 +526,7 @@ static void run_loading(GTask *task, gpointer source, gpointer data, GCancellabl
 	if (g_task_return_error_if_cancelled(task))
 		return;
 	GError *error = NULL;
-	Model *model = read_model(G_FILE(data), &error);
+	Model *model = read_model(G_FILE(data), cancellable, &error);
 	if (model)
 		g_task_return_pointer(task, model, (GDestroyNotify)free_model);
 	else
