@@ -3,7 +3,8 @@
 #include "model/animation.h"
 #include "render/camera.h"
 #include "render/renderer.h"
-#include "window/view-options.h"
+#include "app/view-options.h"
+#include "lang/en.h"
 #include "render/viewer.h"
 
 /* Shaders need OpenGL 3.3 or OpenGL ES 3.0, matching what GTK draws the window with */
@@ -71,7 +72,7 @@ static const ModelAnimation *get_current_animation(Viewer *viewer) {
 static gboolean is_moving(Viewer *viewer) {
 	const ModelAnimation *animation = get_current_animation(viewer);
 	gboolean is_animating = viewer->is_playing && animation && animation->duration > 0;
-	return is_animating || viewer->has_uploads || viewer->movement || get_view_options()->is_turning;
+	return is_animating || viewer->has_uploads || viewer->movement || (viewer->model && get_view_options()->is_turning);
 }
 
 
@@ -133,8 +134,8 @@ static void realize_area(GtkGLArea *area, Viewer *viewer) {
 	int needed_major = is_es ? ES_MAJOR : GL_MAJOR, needed_minor = is_es ? ES_MINOR : GL_MINOR;
 	GError *error = NULL;
 	if (major < needed_major || (major == needed_major && minor < needed_minor)) {
-		error = g_error_new(GDK_GL_ERROR, GDK_GL_ERROR_NOT_AVAILABLE, "OpenGL %s%d.%d is needed, and %d.%d was found",
-			is_es ? "ES " : "", needed_major, needed_minor, major, minor);
+		error = g_error_new(GDK_GL_ERROR, GDK_GL_ERROR_NOT_AVAILABLE, TEXT_OPENGL_NEEDED, is_es ? "ES " : "",
+			needed_major, needed_minor, major, minor);
 		gtk_gl_area_set_error(area, error);
 		g_clear_error(&error);
 		return;
@@ -206,6 +207,8 @@ static void begin_drag(GtkGestureDrag *gesture, double x, double y, Viewer *view
 	viewer->drag_x = viewer->drag_y = 0;
 	static const char *CURSORS[] = {[DRAG_ORBIT] = "grabbing", [DRAG_PAN] = "move", [DRAG_LOOK] = "crosshair"};
 	gtk_widget_set_cursor_from_name(viewer->area, CURSORS[viewer->drag]);
+	/* Pressing the view gives it the keys, which a drawing area does not take by itself */
+	gtk_widget_grab_focus(viewer->area);
 }
 
 
@@ -347,11 +350,6 @@ void show_viewer_model(Viewer *viewer, Model *model) {
 	if (model)
 		frame_camera(&viewer->camera, model->minimum, model->maximum);
 	redraw_viewer(viewer);
-}
-
-
-const Model *get_viewer_model(Viewer *viewer) {
-	return viewer->model;
 }
 
 

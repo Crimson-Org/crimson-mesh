@@ -7,7 +7,8 @@
 #include "render/renderer.h"
 
 #define SAMPLES 4
-/* Each upload step stops after this long, so a large model cannot delay a frame */
+/* Each upload step stops after this long, so a model of many meshes and textures spreads over several frames, while
+ * one mesh or texture still goes up whole */
 #define UPLOAD_BUDGET_MICROSECONDS 6000
 #define ANISOTROPY 8.0f
 #define GRID_LINES 20
@@ -79,6 +80,8 @@ struct Renderer {
 	int grid_count;
 	GLuint skeleton_array, skeleton_buffer;
 	GLuint joint_texture;
+	/* Rows the joint texture holds now, and the largest texture side the card takes */
+	GLint joint_rows, maximum_texture_size;
 	/* Drawn with several samples a pixel, then resolved into a plain texture that is copied to the area */
 	GLuint frame_buffer, colour_buffer, depth_buffer, resolve_buffer, resolve_texture;
 	int frame_width, frame_height;
@@ -136,12 +139,12 @@ static const float JOINT_RIM[4] = {0.05f, 0.02f, 0.04f, 0.85f};
 static const float NO_TINT[4] = {1, 1, 1, 1};
 
 static const char *SURFACE_VERTEX =
-	"layout(location = 0) in vec3 position;\n"
-	"layout(location = 1) in vec3 normal;\n"
-	"layout(location = 2) in vec2 uv;\n"
-	"layout(location = 3) in vec4 colour;\n"
-	"layout(location = 4) in uvec4 joint_ids;\n"
-	"layout(location = 5) in vec4 weights;\n"
+	"layout(location = " G_STRINGIFY(ATTRIBUTE_POSITION) ") in vec3 position;\n"
+	"layout(location = " G_STRINGIFY(ATTRIBUTE_NORMAL) ") in vec3 normal;\n"
+	"layout(location = " G_STRINGIFY(ATTRIBUTE_UV) ") in vec2 uv;\n"
+	"layout(location = " G_STRINGIFY(ATTRIBUTE_COLOUR) ") in vec4 colour;\n"
+	"layout(location = " G_STRINGIFY(ATTRIBUTE_JOINTS) ") in uvec4 joint_ids;\n"
+	"layout(location = " G_STRINGIFY(ATTRIBUTE_WEIGHTS) ") in vec4 weights;\n"
 	"uniform mat4 model, view, projection;\n"
 	"uniform mat3 normal_matrix;\n"
 	"uniform bool is_skinned;\n"
@@ -172,7 +175,14 @@ static const char *SURFACE_VERTEX =
 	"	gl_Position = projection * view * placed;\n"
 	"}\n";
 
+/* Colours are lit in linear light with a soft highlight, then tone mapped with the ACES fit and turned back to sRGB */
 static const char *SURFACE_FRAGMENT =
+	"const int LIGHT_COUNT = " G_STRINGIFY(LIGHT_COUNT) ";\n"
+	"const float GAMMA = 2.2;\n"
+	"const float CUTOUT_ALPHA = 0.1;\n"
+	"const float SHININESS = 48.0;\n"
+	"const float SHINE_STRENGTH = 0.18;\n"
+	"const float ACES_A = 2.51, ACES_B = 0.03, ACES_C = 2.43, ACES_D = 0.59, ACES_E = 0.14;\n"
 	"in vec3 world_position, world_normal;\n"
 	"in vec2 texture_uv;\n"
 	"in vec4 vertex_colour;\n"
@@ -180,17 +190,17 @@ static const char *SURFACE_FRAGMENT =
 	"uniform sampler2D base_texture;\n"
 	"uniform bool has_texture, is_lit, is_wire;\n"
 	"uniform vec3 eye, sky, ground;\n"
-	"uniform vec3 light_directions[3], light_colours[3];\n"
+	"uniform vec3 light_directions[LIGHT_COUNT], light_colours[LIGHT_COUNT];\n"
 	"out vec4 result;\n"
 	"void main() {\n"
 	"	if (is_wire) {\n"
 	"		result = wire_colour;\n"
 	"		return;\n"
 	"	}\n"
-	"	vec4 colour = base_colour * vec4(pow(vertex_colour.rgb, vec3(2.2)), vertex_colour.a);\n"
+	"	vec4 colour = base_colour * vec4(pow(vertex_colour.rgb, vec3(GAMMA)), vertex_colour.a);\n"
 	"	if (has_texture)\n"
 	"		colour *= texture(base_texture, texture_uv);\n"
-	"	if (colour.a < 0.1)\n"
+	"	if (colour.a < CUTOUT_ALPHA)\n"
 	"		discard;\n"
 	"	vec3 shade = colour.rgb;\n"
 	"	if (is_lit) {\n"
@@ -200,22 +210,23 @@ static const char *SURFACE_FRAGMENT =
 	"		vec3 toward_eye = normalize(eye - world_position);\n"
 	"		vec3 light = mix(ground, sky, facing.y * 0.5 + 0.5);\n"
 	"		vec3 shine = vec3(0.0);\n"
-	"		for (int index = 0; index < 3; index++) {\n"
+	"		for (int index = 0; index < LIGHT_COUNT; index++) {\n"
 	"			vec3 toward_light = -normalize(light_directions[index] + vec3(1e-6));\n"
 	"			float lit = max(dot(facing, toward_light), 0.0);\n"
 	"			light += light_colours[index] * lit;\n"
 	"			vec3 halfway = normalize(toward_light + toward_eye);\n"
-	"			shine += light_colours[index] * pow(max(dot(facing, halfway), 0.0), 48.0) * 0.18 * step(0.0, lit);\n"
+	"			shine += light_colours[index] * pow(max(dot(facing, halfway), 0.0), SHININESS) * SHINE_STRENGTH\n"
+	"				* step(0.0, lit);\n"
 	"		}\n"
 	"		shade = shade * light + shine;\n"
-	"		shade = shade * (2.51 * shade + 0.03) / (shade * (2.43 * shade + 0.59) + 0.14);\n"
+	"		shade = shade * (ACES_A * shade + ACES_B) / (shade * (ACES_C * shade + ACES_D) + ACES_E);\n"
 	"	}\n"
-	"	result = vec4(pow(clamp(shade, 0.0, 1.0), vec3(1.0 / 2.2)), 1.0);\n"
+	"	result = vec4(pow(clamp(shade, 0.0, 1.0), vec3(1.0 / GAMMA)), 1.0);\n"
 	"}\n";
 
 static const char *LINE_VERTEX =
-	"layout(location = 0) in vec3 position;\n"
-	"layout(location = 3) in vec4 colour;\n"
+	"layout(location = " G_STRINGIFY(ATTRIBUTE_POSITION) ") in vec3 position;\n"
+	"layout(location = " G_STRINGIFY(ATTRIBUTE_COLOUR) ") in vec4 colour;\n"
 	"uniform mat4 view_projection;\n"
 	"uniform float point_size;\n"
 	"out vec4 line_colour;\n"
@@ -397,6 +408,7 @@ Renderer *create_renderer(gboolean is_es, GError **error) {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	if (epoxy_has_gl_extension("GL_EXT_texture_filter_anisotropic"))
 		renderer->anisotropy = ANISOTROPY;
+	glGetIntegerv(GL_MAX_TEXTURE_SIZE, &renderer->maximum_texture_size);
 	return renderer;
 }
 
@@ -535,14 +547,19 @@ static void upload_mesh(MeshBuffers *buffers, const ModelMesh *mesh) {
 }
 
 
-/* Textures hold colours, so the card reads them as sRGB and the shader lights them in linear light */
+/* Textures hold colours, so the card reads them as sRGB and the shader lights them in linear light, while one
+ * larger than the card takes shows as plain white rather than failing without a word */
 static GLuint upload_texture(const Renderer *renderer, const ModelTexture *texture) {
+	static const guint8 WHITE[] = {G_MAXUINT8, G_MAXUINT8, G_MAXUINT8, G_MAXUINT8};
+	gboolean fits = texture->width <= renderer->maximum_texture_size && texture->height <= renderer->maximum_texture_size;
+	if (!fits)
+		g_message("A %dx%d texture is larger than the graphics card takes", texture->width, texture->height);
 	GLuint name;
 	glGenTextures(1, &name);
 	glBindTexture(GL_TEXTURE_2D, name);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, texture->width, texture->height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-		g_bytes_get_data(texture->pixels, NULL));
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, fits ? texture->width : 1, fits ? texture->height : 1, 0, GL_RGBA,
+		GL_UNSIGNED_BYTE, fits ? g_bytes_get_data(texture->pixels, NULL) : WHITE);
 	glGenerateMipmap(GL_TEXTURE_2D);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -631,14 +648,29 @@ static void set_lighting(const Renderer *renderer, const RenderFrame *frame) {
 }
 
 
+/* Each joint is one row, so the texture is made once for the model and only its values change each frame */
 static void upload_joints(Renderer *renderer, const RenderFrame *frame) {
 	guint count = renderer->model->joints->len;
 	Matrix4 identity = get_identity_matrix();
+	GLint rows = (GLint)MAX(count, 1);
+	const float *values = count ? frame->joints->values : identity.values;
 	glActiveTexture(GL_TEXTURE0 + TEXTURE_UNIT_JOINTS);
 	glBindTexture(GL_TEXTURE_2D, renderer->joint_texture);
 	glPixelStorei(GL_UNPACK_ALIGNMENT, sizeof(float));
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, JOINT_TEXELS, (GLsizei)MAX(count, 1), 0, GL_RGBA, GL_FLOAT,
-		count ? frame->joints->values : identity.values);
+	if (rows > renderer->maximum_texture_size)
+		return;
+	if (rows != renderer->joint_rows) {
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, JOINT_TEXELS, rows, 0, GL_RGBA, GL_FLOAT, values);
+		renderer->joint_rows = rows;
+		return;
+	}
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, JOINT_TEXELS, rows, GL_RGBA, GL_FLOAT, values);
+}
+
+
+/* A rig with more joints than the joint texture can hold is drawn in its resting pose */
+static gboolean can_skin(const Renderer *renderer) {
+	return (GLint)renderer->model->joints->len <= renderer->maximum_texture_size;
 }
 
 
@@ -652,12 +684,13 @@ static void draw_mesh(const Renderer *renderer, const RenderFrame *frame, guint 
 	gboolean has_texture = frame->options->shows_textures && material->texture >= 0
 		&& (guint)material->texture < renderer->uploaded_textures;
 	Matrix4 identity = get_identity_matrix();
-	const Matrix4 *model = mesh->is_skinned ? &identity : place;
+	gboolean is_skinned = mesh->is_skinned && can_skin(renderer);
+	const Matrix4 *model = is_skinned ? &identity : place;
 	float normal[NORMAL_MATRIX_VALUES];
 	get_normal_matrix(model, normal);
 	glUniformMatrix4fv(surface->model, 1, GL_FALSE, model->values);
 	glUniformMatrix3fv(surface->normal_matrix, 1, GL_FALSE, normal);
-	glUniform1i(surface->is_skinned, mesh->is_skinned);
+	glUniform1i(surface->is_skinned, is_skinned);
 	glUniform1i(surface->joint_base, (GLint)mesh->joint_base);
 	glUniform4fv(surface->base_colour, 1, material->colour);
 	glUniform1i(surface->has_texture, has_texture);

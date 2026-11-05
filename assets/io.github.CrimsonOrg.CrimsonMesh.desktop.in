@@ -6,6 +6,6 @@ Exec=@EXEC@ %U
 Icon=io.github.CrimsonOrg.CrimsonMesh
 Terminal=false
 Categories=Graphics;3DGraphics;Viewer;GTK;
-MimeType=model/gltf-binary;model/gltf+json;model/obj;model/stl;model/x.stl-ascii;model/x.stl-binary;model/3mf;model/vrml;
+MimeType=model/gltf-binary;model/gltf+json;model/obj;model/stl;model/x.stl-ascii;model/x.stl-binary;model/3mf;image/x-3ds;
 Keywords=3d;model;mesh;viewer;gltf;glb;fbx;obj;stl;
 StartupNotify=true

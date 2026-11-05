@@ -1,6 +1,6 @@
 #pragma once
 
-#include <stdbool.h>
+#include <glib.h>
 
 /* Sizes of the values a vertex and a matrix hold */
 #define POINT_COMPONENTS 3
@@ -51,4 +51,5 @@ Vector3 transform_point(const Matrix4 *matrix, Vector3 point);
 Vector3 get_matrix_position(const Matrix4 *matrix);
 /* The matrix that turns normals the same way the given matrix turns points */
 void get_normal_matrix(const Matrix4 *matrix, float normal[NORMAL_MATRIX_VALUES]);
-bool is_identity_matrix(const Matrix4 *matrix);
+/* Splits a resting matrix into its position, rotation and scale, with no rotation for a part scaled to nothing */
+void split_matrix(const Matrix4 *matrix, Vector3 *position, Quaternion *rotation, Vector3 *scale);

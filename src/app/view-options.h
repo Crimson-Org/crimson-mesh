@@ -1,6 +1,6 @@
 #pragma once
 
-#include <glib.h>
+#include <gtk/gtk.h>
 
 /* How the model is lit, from studio lamps to no lighting at all */
 typedef enum {
@@ -25,7 +25,8 @@ typedef enum {
 #define MINIMUM_SPEED 10
 #define MAXIMUM_SPEED 400
 
-/* What the view shows, chosen from the header bar, and how fast it moves, chosen in Settings, kept between launches */
+/* What the view shows, chosen from the header bar, and how fast it moves, chosen in Settings, kept between launches
+ * and shared by every window */
 typedef struct {
 	gboolean shows_wireframe, shows_skeleton, shows_grid, shows_textures, is_turning;
 	Lighting lighting;
@@ -38,6 +39,11 @@ typedef struct {
 extern const char *const LIGHTING_NAMES[LIGHTING_COUNT];
 extern const char *const BACKGROUND_NAMES[BACKGROUND_COUNT];
 
-int find_option_name(const char *const *names, int count, const char *name, int fallback);
+/* Called after any view option changed, so every window can draw again */
+typedef void (*ViewOptionsChanged)(gpointer data);
+
 ViewOptions *get_view_options(void);
 void save_view_options(void);
+/* Puts the view switches and choices on the application as actions, such as app.grid and app.lighting, so every
+ * window shows the same state, with app.next-lighting and app.next-background stepping through the choices */
+void add_view_actions(GtkApplication *application, ViewOptionsChanged changed, gpointer data);

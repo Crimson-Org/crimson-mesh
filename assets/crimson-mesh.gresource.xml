@@ -2,7 +2,6 @@
 <gresources>
 	<gresource prefix="/io/github/CrimsonOrg/CrimsonMesh">
 		<file>style.css</file>
-		<file alias="common.css">../subprojects/crimson-core/assets/common.css</file>
 		<file>icons/scalable/apps/io.github.CrimsonOrg.CrimsonMesh.svg</file>
 		<file>icons/scalable/actions/crimson-background-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-grid-symbolic.svg</file>

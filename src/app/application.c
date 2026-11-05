@@ -3,6 +3,7 @@
 #include "lang/en.h"
 #include "app/application.h"
 #include "app/settings-dialog.h"
+#include "app/view-options.h"
 #include "window/window.h"
 
 
@@ -39,55 +40,25 @@ static void open_files(GApplication *application, GFile **files, int count, cons
 }
 
 
-static void show_about(GSimpleAction *action, GVariant *parameter, gpointer application) {
-	AdwDialog *dialog = adw_about_dialog_new();
-	adw_about_dialog_set_application_name(ADW_ABOUT_DIALOG(dialog), get_application_identity()->name);
-	adw_about_dialog_set_application_icon(ADW_ABOUT_DIALOG(dialog), get_application_identity()->id);
-	adw_about_dialog_set_version(ADW_ABOUT_DIALOG(dialog), get_application_identity()->version);
-	adw_dialog_present(dialog, GTK_WIDGET(gtk_application_get_active_window(application)));
-}
-
-
-static void open_settings(GSimpleAction *action, GVariant *parameter, gpointer application) {
-	show_settings(GTK_WIDGET(gtk_application_get_active_window(application)));
-}
-
-
-static void quit(GSimpleAction *action, GVariant *parameter, gpointer application) {
-	GtkWindow *window = gtk_application_get_active_window(application);
-	if (window)
-		gtk_window_close(window);
+/* The view options are the same in every window, so each one draws again after a change */
+static void redraw_windows(gpointer application) {
+	for (GList *item = gtk_application_get_windows(application); item; item = item->next) {
+		Window *window = g_object_get_data(G_OBJECT(item->data), "window");
+		if (window)
+			redraw_window(window);
+	}
 }
 
 
 static void start_up(GApplication *application) {
-	static const GActionEntry ENTRIES[] = {
-		{"about", show_about, NULL, NULL, NULL, {0}},
-		{"settings", open_settings, NULL, NULL, NULL, {0}},
-		{"quit", quit, NULL, NULL, NULL, {0}},
-	};
-	static const struct {
-		const char *action, *accelerators[3];
-	} SHORTCUTS[] = {
-		{"win.open", {"<Control>o", NULL}},
-		{"win.frame", {"f", "Home", NULL}},
-		{"win.grid", {"g", NULL}},
-		{"win.wireframe", {"z", NULL}},
-		{"win.skeleton", {"j", NULL}},
-		{"win.textures", {"t", NULL}},
-		{"win.turntable", {"r", NULL}},
-		{"win.next-lighting", {"l", NULL}},
-		{"win.next-background", {"b", NULL}},
-		{"win.play", {"space", NULL}},
-		{"app.settings", {"<Control>comma", NULL}},
-		{"app.quit", {"<Control>q", "<Control>w", NULL}},
-	};
-	g_action_map_add_action_entries(G_ACTION_MAP(application), ENTRIES, G_N_ELEMENTS(ENTRIES), application);
-	for (guint index = 0; index < G_N_ELEMENTS(SHORTCUTS); index++)
-		gtk_application_set_accels_for_action(GTK_APPLICATION(application), SHORTCUTS[index].action,
-			SHORTCUTS[index].accelerators);
+	add_view_actions(GTK_APPLICATION(application), redraw_windows, application);
 }
 
+
+static const Shortcut SHORTCUTS[] = {
+	{"win.open", {"<Control>o", NULL}},
+	{"window.close", {"<Control>w", NULL}},
+};
 
 const ApplicationSetup APPLICATION_SETUP = {
 	.identity = {"io.github.CrimsonOrg.CrimsonMesh", TEXT_APPLICATION_NAME, "crimson-mesh", APPLICATION_VERSION},
@@ -95,4 +66,7 @@ const ApplicationSetup APPLICATION_SETUP = {
 	.activate = activate,
 	.open = open_files,
 	.parameter_summary = TEXT_FILES_OPTION,
+	.show_settings = show_settings,
+	.shortcuts = SHORTCUTS,
+	.shortcut_count = G_N_ELEMENTS(SHORTCUTS),
 };

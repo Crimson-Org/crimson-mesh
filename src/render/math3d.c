@@ -5,6 +5,8 @@
 
 /* Quaternions closer than this are blended linearly, since the angle between them is too small to divide */
 #define SLERP_LINEAR_LIMIT 0.9995f
+/* Below this a matrix has no inverse that means anything */
+#define SINGULAR_DETERMINANT 1e-12f
 
 
 Vector3 make_vector(float x, float y, float z) {
@@ -79,6 +81,9 @@ Quaternion mix_quaternions(Quaternion a, Quaternion b, float amount) {
 	}
 	Quaternion mixed = {from * a.x + to * b.x, from * a.y + to * b.y, from * a.z + to * b.z, from * a.w + to * b.w};
 	float length = sqrtf(mixed.x * mixed.x + mixed.y * mixed.y + mixed.z * mixed.z + mixed.w * mixed.w);
+	/* Keys of zero length, which a broken file may hold, mix to no rotation instead of NaN */
+	if (length < SMALLEST_SIZE)
+		return (Quaternion){0, 0, 0, 1};
 	return (Quaternion){mixed.x / length, mixed.y / length, mixed.z / length, mixed.w / length};
 }
 
@@ -158,7 +163,7 @@ void get_normal_matrix(const Matrix4 *matrix, float normal[NORMAL_MATRIX_VALUES]
 	const float *m = matrix->values;
 	float a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], i = m[10];
 	float determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
-	if (fabsf(determinant) < 1e-12f) {
+	if (fabsf(determinant) < SINGULAR_DETERMINANT) {
 		float identity[NORMAL_MATRIX_VALUES] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 		memcpy(normal, identity, sizeof(identity));
 		return;
@@ -176,7 +181,32 @@ void get_normal_matrix(const Matrix4 *matrix, float normal[NORMAL_MATRIX_VALUES]
 }
 
 
-bool is_identity_matrix(const Matrix4 *matrix) {
-	Matrix4 identity = get_identity_matrix();
-	return memcmp(matrix, &identity, sizeof(identity)) == 0;
+void split_matrix(const Matrix4 *matrix, Vector3 *position, Quaternion *rotation, Vector3 *scale) {
+	const float *m = matrix->values;
+	*position = make_vector(m[12], m[13], m[14]);
+	*scale = make_vector(get_vector_length(make_vector(m[0], m[1], m[2])),
+		get_vector_length(make_vector(m[4], m[5], m[6])), get_vector_length(make_vector(m[8], m[9], m[10])));
+	if (scale->x < SMALLEST_SIZE || scale->y < SMALLEST_SIZE || scale->z < SMALLEST_SIZE) {
+		*rotation = (Quaternion){0, 0, 0, 1};
+		return;
+	}
+	float r[NORMAL_MATRIX_VALUES] = {
+		m[0] / scale->x, m[1] / scale->x, m[2] / scale->x,
+		m[4] / scale->y, m[5] / scale->y, m[6] / scale->y,
+		m[8] / scale->z, m[9] / scale->z, m[10] / scale->z,
+	};
+	float trace = r[0] + r[4] + r[8];
+	if (trace > 0) {
+		float s = sqrtf(trace + 1) * 2;
+		*rotation = (Quaternion){(r[5] - r[7]) / s, (r[6] - r[2]) / s, (r[1] - r[3]) / s, s / 4};
+	} else if (r[0] > r[4] && r[0] > r[8]) {
+		float s = sqrtf(1 + r[0] - r[4] - r[8]) * 2;
+		*rotation = (Quaternion){s / 4, (r[3] + r[1]) / s, (r[6] + r[2]) / s, (r[5] - r[7]) / s};
+	} else if (r[4] > r[8]) {
+		float s = sqrtf(1 + r[4] - r[0] - r[8]) * 2;
+		*rotation = (Quaternion){(r[3] + r[1]) / s, s / 4, (r[7] + r[5]) / s, (r[6] - r[2]) / s};
+	} else {
+		float s = sqrtf(1 + r[8] - r[0] - r[4]) * 2;
+		*rotation = (Quaternion){(r[6] + r[2]) / s, (r[7] + r[5]) / s, s / 4, (r[1] - r[3]) / s};
+	}
 }

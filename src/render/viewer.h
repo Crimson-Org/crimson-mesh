@@ -13,7 +13,6 @@ Viewer *create_viewer(ViewerTimeChanged time_changed, gpointer data);
 GtkWidget *get_viewer_widget(Viewer *viewer);
 /* Takes the model and frames it, or clears the view without one */
 void show_viewer_model(Viewer *viewer, Model *model);
-const Model *get_viewer_model(Viewer *viewer);
 /* Listens on the window for the movement keys, so flying works wherever the focus is */
 void add_viewer_keys(Viewer *viewer, GtkWidget *window);
 void frame_viewer(Viewer *viewer);

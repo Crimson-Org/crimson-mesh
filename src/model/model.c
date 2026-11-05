@@ -8,6 +8,7 @@
 #include <gdk/gdk.h>
 #include <string.h>
 
+#include "lang/en.h"
 #include "model/model.h"
 
 /* Files that leave the timing out are played at the frame rate most exporters assume */
@@ -18,6 +19,15 @@
 	| aiProcess_PopulateArmatureData)
 /* The smoothing angle the Assimp documentation names as giving good results */
 #define SMOOTHING_ANGLE 80.0f
+/* A model file is untrusted, so its textures may only be regular files of a sane size, and pictures that would
+ * decode into more pixels than this are refused from their header, before any pixel is made */
+#define MAXIMUM_TEXTURE_FILE_BYTES (256 * 1024 * 1024)
+#define MAXIMUM_TEXTURE_PIXELS (8192 * 8192)
+/* The header is fed in pieces this large until it tells the picture's size */
+#define PROBE_CHUNK_BYTES (64 * 1024)
+
+/* Assimp keeps the last error in one string for every thread, so imports take turns */
+static GMutex import_lock;
 
 
 /* Assimp stores matrices row after row, and OpenGL reads them column after column */
@@ -98,7 +108,34 @@ static gboolean read_pixbuf_pixels(GdkPixbuf *source, ModelTexture *pixels) {
 }
 
 
+typedef struct {
+	int width, height;
+} PictureSize;
+
+
+static void note_picture_size(GdkPixbufLoader *loader, int width, int height, PictureSize *size) {
+	*size = (PictureSize){width, height};
+}
+
+
+static gboolean is_picture_small_enough(GBytes *bytes) {
+	PictureSize size = {0};
+	g_autoptr(GdkPixbufLoader) loader = gdk_pixbuf_loader_new();
+	g_signal_connect(loader, "size-prepared", G_CALLBACK(note_picture_size), &size);
+	const guint8 *data = g_bytes_get_data(bytes, NULL);
+	gsize length = g_bytes_get_size(bytes);
+	for (gsize offset = 0; offset < length && size.width == 0; offset += PROBE_CHUNK_BYTES)
+		if (!gdk_pixbuf_loader_write(loader, data + offset, MIN(PROBE_CHUNK_BYTES, length - offset), NULL))
+			break;
+	/* Closing a picture fed only in part reports it unfinished, which is expected here */
+	gdk_pixbuf_loader_close(loader, NULL);
+	return size.width > 0 && size.height > 0 && (gint64)size.width * size.height <= MAXIMUM_TEXTURE_PIXELS;
+}
+
+
 static gboolean decode_texture_bytes(GBytes *bytes, ModelTexture *pixels) {
+	if (!is_picture_small_enough(bytes))
+		return FALSE;
 	g_autoptr(GdkTexture) decoded = gdk_texture_new_from_bytes(bytes, NULL);
 	if (decoded)
 		return read_texture_pixels(decoded, pixels);
@@ -107,7 +144,13 @@ static gboolean decode_texture_bytes(GBytes *bytes, ModelTexture *pixels) {
 }
 
 
+/* A texture path may name anything, such as a device or a pipe, so only regular files of a sane size are read */
 static gboolean decode_texture_file(GFile *file, ModelTexture *pixels) {
+	g_autoptr(GFileInfo) info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_TYPE "," G_FILE_ATTRIBUTE_STANDARD_SIZE,
+		G_FILE_QUERY_INFO_NONE, NULL, NULL);
+	if (!info || g_file_info_get_file_type(info) != G_FILE_TYPE_REGULAR
+		|| g_file_info_get_size(info) > MAXIMUM_TEXTURE_FILE_BYTES)
+		return FALSE;
 	g_autoptr(GBytes) bytes = g_file_load_bytes(file, NULL, NULL, NULL);
 	return bytes && decode_texture_bytes(bytes, pixels);
 }
@@ -116,6 +159,8 @@ static gboolean decode_texture_file(GFile *file, ModelTexture *pixels) {
 /* Raw embedded texels are stored blue first, as Assimp keeps them */
 static gboolean read_raw_texels(const struct aiTexture *texture, ModelTexture *pixels) {
 	gsize count = (gsize)texture->mWidth * texture->mHeight;
+	if (count > MAXIMUM_TEXTURE_PIXELS)
+		return FALSE;
 	guint8 *rgba = g_malloc(count * COLOUR_CHANNELS);
 	for (gsize index = 0; index < count; index++) {
 		const struct aiTexel *texel = &texture->pcData[index];
@@ -368,7 +413,8 @@ static void measure_bounds(Model *model) {
 			for (guint vertex_index = 0; vertex_index < mesh->vertex_count; vertex_index++) {
 				ModelVertex *vertex = &mesh->vertices[vertex_index];
 				Vector3 point = make_vector(vertex->position[0], vertex->position[1], vertex->position[2]);
-				Vector3 placed = transform_point(&globals[index], point);
+				/* A skinned mesh is drawn by its joints alone, so a vertex no joint bends stays where it is */
+				Vector3 placed = mesh->is_skinned ? point : transform_point(&globals[index], point);
 				if (mesh->is_skinned && vertex->weights[0] + vertex->weights[1] + vertex->weights[2]
 					+ vertex->weights[3] > 0) {
 					placed = make_vector(0, 0, 0);
@@ -431,17 +477,20 @@ static Model *create_model(void) {
 static Model *read_model(GFile *file, GError **error) {
 	g_autofree char *path = g_file_get_path(file);
 	if (!path) {
-		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, "Only files on this computer can be opened");
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_NOT_SUPPORTED, TEXT_NOT_LOCAL);
 		return NULL;
 	}
 	struct aiPropertyStore *properties = aiCreatePropertyStore();
 	aiSetImportPropertyInteger(properties, AI_CONFIG_PP_SBP_REMOVE, aiPrimitiveType_POINT | aiPrimitiveType_LINE);
 	aiSetImportPropertyInteger(properties, AI_CONFIG_PP_LBW_MAX_WEIGHTS, JOINTS_PER_VERTEX);
 	aiSetImportPropertyFloat(properties, AI_CONFIG_PP_GSN_MAX_SMOOTHING_ANGLE, SMOOTHING_ANGLE);
+	g_mutex_lock(&import_lock);
 	const struct aiScene *scene = aiImportFileExWithProperties(path, LOAD_STEPS, NULL, properties);
+	if (!scene || !scene->mRootNode)
+		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, aiGetErrorString());
+	g_mutex_unlock(&import_lock);
 	aiReleasePropertyStore(properties);
 	if (!scene || !scene->mRootNode) {
-		g_set_error_literal(error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, aiGetErrorString());
 		if (scene)
 			aiReleaseImport(scene);
 		return NULL;
@@ -457,7 +506,9 @@ static Model *read_model(GFile *file, GError **error) {
 	add_animations(model, names, scene);
 	mark_bones(model);
 	measure_bounds(model);
-	const char *extension = strrchr(path, '.');
+	/* The format comes from the file's own name, as a folder name may hold a dot too */
+	g_autofree char *name = g_path_get_basename(path);
+	const char *extension = strrchr(name, '.');
 	model->format = g_ascii_strup(extension ? extension + 1 : "", -1);
 	aiReleaseImport(scene);
 	return model;
@@ -465,6 +516,9 @@ static Model *read_model(GFile *file, GError **error) {
 
 
 static void run_loading(GTask *task, gpointer source, gpointer data, GCancellable *cancellable) {
+	/* A load replaced before its worker ran is never read */
+	if (g_task_return_error_if_cancelled(task))
+		return;
 	GError *error = NULL;
 	Model *model = read_model(G_FILE(data), &error);
 	if (model)

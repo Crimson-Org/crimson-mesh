@@ -1,40 +1,53 @@
 #include <string.h>
 
 #include "lang/en.h"
-#include "common/loading.h"
-#include "common/log.h"
-#include "common/startup.h"
+#include "common/widgets/loading.h"
+#include "common/app/log.h"
+#include "common/app/startup.h"
+#include "common/text/numbers.h"
+#include "common/window/file-drop.h"
 #include "model/model.h"
 #include "app/state.h"
-#include "window/view-options.h"
+#include "app/view-options.h"
 #include "render/viewer.h"
 #include "window/window.h"
-#include "common/spacing.h"
+#include "common/widgets/spacing.h"
 
 #define TIMELINE_WIDTH 320
 #define TIMELINE_STEP 0.01
-/* Counts are grouped in thousands, such as 12,345 */
-#define DIGITS_PER_GROUP 3
 #define SUFFIX_PATTERN_START "*."
+
+/* Keys that act on the view, which reach it only when no focused button or dialog took them */
+static const struct {
+	const char *key, *action;
+} VIEW_KEYS[] = {
+	{"f", "win.frame"}, {"Home", "win.frame"}, {"g", "app.grid"}, {"z", "app.wireframe"}, {"j", "app.skeleton"},
+	{"t", "app.textures"}, {"r", "app.turntable"}, {"l", "app.next-lighting"}, {"b", "app.next-background"},
+	{"space", "win.play"},
+};
 
 struct Window {
 	GtkWidget *window, *title, *stack, *spinner, *error_page;
-	GtkWidget *animation_bar, *animation_list, *timeline, *time_label, *play_button;
-	GSimpleAction *skeleton_action, *play_action;
+	GtkWidget *animation_bar, *animation_list, *timeline, *time_label, *play_button, *skeleton_button;
+	GSimpleAction *play_action;
 	Viewer *viewer;
 	GFile *file;
 	GCancellable *loading;
-	/* The timeline is being moved by the animation and not by a drag */
-	gboolean is_following_time;
+	/* The timeline is being moved by the animation and not by a drag, or held by the pointer */
+	gboolean is_following_time, is_timeline_held;
 	gboolean is_started;
 };
 
-/* A model on its way, which the window only takes while it still wants it */
+/* A model on its way, which the window only takes while it still wants it, so a closed window cancels it */
 typedef struct {
 	Window *window;
 	GFile *file;
 	GCancellable *cancellable;
+	/* Handed to the worker, which frees it once it is done */
+	gboolean is_started;
 } LoadRequest;
+
+static gboolean has_noted_model;
 
 static const char *const LIGHTING_TITLES[LIGHTING_COUNT] = {
 	TEXT_LIGHT_STUDIO, TEXT_LIGHT_DAYLIGHT, TEXT_LIGHT_HEADLIGHT, TEXT_LIGHT_FLAT,
@@ -53,6 +66,9 @@ static void update_time_label(Window *window, float time) {
 
 static void follow_time(float time, gpointer data) {
 	Window *window = data;
+	/* The pointer holding the timeline sets the time itself, so the animation does not move the slider away */
+	if (window->is_timeline_held)
+		return;
 	window->is_following_time = TRUE;
 	gtk_range_set_value(GTK_RANGE(window->timeline), time);
 	window->is_following_time = FALSE;
@@ -76,6 +92,16 @@ static void move_timeline(GtkRange *range, Window *window) {
 	float time = (float)gtk_range_get_value(range);
 	seek_viewer(window->viewer, time);
 	update_time_label(window, time);
+}
+
+
+static void hold_timeline(Window *window) {
+	window->is_timeline_held = TRUE;
+}
+
+
+static void release_timeline(Window *window) {
+	window->is_timeline_held = FALSE;
 }
 
 
@@ -112,24 +138,18 @@ static void show_animations(Window *window, const Model *model) {
 }
 
 
-/* Large counts read in groups of three, as 1,234,567 */
-static char *format_count(guint count) {
-	g_autofree char *digits = g_strdup_printf("%u", count);
-	GString *grouped = g_string_new(NULL);
-	gsize length = strlen(digits);
-	for (gsize index = 0; index < length; index++) {
-		if (index > 0 && (length - index) % DIGITS_PER_GROUP == 0)
-			g_string_append_c(grouped, ',');
-		g_string_append_c(grouped, digits[index]);
-	}
-	return g_string_free(grouped, FALSE);
-}
-
-
 static void show_model_summary(Window *window, const Model *model) {
 	g_autofree char *triangles = format_count(model->triangle_count);
 	g_autofree char *summary = g_strdup_printf(TEXT_MODEL_SUMMARY, model->format, triangles);
 	adw_window_title_set_subtitle(ADW_WINDOW_TITLE(window->title), summary);
+}
+
+
+static void free_load_request(gpointer data) {
+	LoadRequest *request = data;
+	g_object_unref(request->cancellable);
+	g_object_unref(request->file);
+	g_free(request);
 }
 
 
@@ -139,9 +159,7 @@ static void finish_loading(GObject *source, GAsyncResult *result, gpointer data)
 	Model *model = finish_loading_model(result, &error);
 	gboolean is_wanted = !g_cancellable_is_cancelled(request->cancellable);
 	Window *window = request->window;
-	g_object_unref(request->cancellable);
-	g_object_unref(request->file);
-	g_free(request);
+	free_load_request(request);
 	if (!is_wanted) {
 		g_clear_pointer(&model, free_model);
 		return;
@@ -149,17 +167,22 @@ static void finish_loading(GObject *source, GAsyncResult *result, gpointer data)
 	g_clear_object(&window->loading);
 	gtk_widget_set_visible(window->spinner, FALSE);
 	if (!model) {
+		/* The reader's own words name the path and its internals, which belong in the log */
 		g_message("Model could not be opened: %s", error->message);
-		adw_status_page_set_description(ADW_STATUS_PAGE(window->error_page), error->message);
+		adw_status_page_set_description(ADW_STATUS_PAGE(window->error_page), TEXT_ERROR_DESCRIPTION);
 		adw_window_title_set_subtitle(ADW_WINDOW_TITLE(window->title), NULL);
-		gtk_stack_set_visible_child_name(GTK_STACK(window->stack), "error");
+		/* The load's result is a change of data, which switches without a fade */
+		gtk_stack_set_visible_child_full(GTK_STACK(window->stack), "error", GTK_STACK_TRANSITION_TYPE_NONE);
 		return;
 	}
-	note_startup_moment("Model read");
-	g_simple_action_set_enabled(window->skeleton_action, model->has_skeleton);
+	if (!has_noted_model)
+		note_startup_moment("Model read");
+	has_noted_model = TRUE;
+	gtk_widget_set_sensitive(window->skeleton_button, model->has_skeleton);
 	show_model_summary(window, model);
 	show_viewer_model(window->viewer, model);
 	show_animations(window, model);
+	gtk_widget_grab_focus(get_viewer_widget(window->viewer));
 }
 
 
@@ -168,11 +191,23 @@ gboolean has_window_file(Window *window) {
 }
 
 
-/* The worker starts after the window's next frame, so the window and its spinner are on screen first */
+/* The worker starts after the window's next frame, so the window and its spinner are on screen first, and a load
+ * replaced meanwhile never starts */
 static gboolean start_loading(gpointer data) {
 	LoadRequest *request = data;
+	if (g_cancellable_is_cancelled(request->cancellable))
+		return G_SOURCE_REMOVE;
+	request->is_started = TRUE;
 	load_model(request->file, request->cancellable, finish_loading, request);
 	return G_SOURCE_REMOVE;
+}
+
+
+/* Runs after the frame, or when the window closed first, and frees a request the worker never took */
+static void forget_load_request(gpointer data) {
+	LoadRequest *request = data;
+	if (!request->is_started)
+		free_load_request(request);
 }
 
 
@@ -196,18 +231,31 @@ void open_window_file(Window *window, GFile *file) {
 	request->window = window;
 	request->cancellable = g_object_ref(window->loading);
 	request->file = g_object_ref(file);
-	run_after_frame(window->window, start_loading, request);
+	run_after_frame(window->window, start_loading, request, forget_load_request);
 }
 
 
-static void open_chosen_files(GObject *dialog, GAsyncResult *result, gpointer data) {
-	Window *window = data;
-	g_autoptr(GListModel) files = gtk_file_dialog_open_multiple_finish(GTK_FILE_DIALOG(dialog), result, NULL);
-	for (guint index = 0; files && index < g_list_model_get_n_items(files); index++) {
-		g_autoptr(GFile) file = g_list_model_get_item(files, index);
-		GApplication *application = G_APPLICATION(gtk_window_get_application(GTK_WINDOW(window->window)));
-		g_application_open(application, &file, 1, "");
+/* Files chosen or dropped in a window show there, the first in that window and each further one in a new window */
+static void open_files_here(Window *window, GFile **files, guint count) {
+	for (guint index = 0; index < count; index++) {
+		if (index == 0 && window)
+			open_window_file(window, files[index]);
+		else
+			g_application_open(g_application_get_default(), &files[index], 1, "");
 	}
+}
+
+
+/* The dialog holds its window, which may have closed while the dialog was open */
+static void open_chosen_files(GObject *dialog, GAsyncResult *result, gpointer data) {
+	g_autoptr(GtkWidget) widget = data;
+	g_autoptr(GListModel) files = gtk_file_dialog_open_multiple_finish(GTK_FILE_DIALOG(dialog), result, NULL);
+	g_autoptr(GPtrArray) chosen = g_ptr_array_new_with_free_func(g_object_unref);
+	for (guint index = 0; files && index < g_list_model_get_n_items(files); index++)
+		g_ptr_array_add(chosen, g_list_model_get_item(files, index));
+	Window *window = gtk_window_get_application(GTK_WINDOW(widget)) ? g_object_get_data(G_OBJECT(widget), "window")
+		: NULL;
+	open_files_here(window, (GFile **)chosen->pdata, chosen->len);
 }
 
 
@@ -230,7 +278,8 @@ static void choose_files(GSimpleAction *action, GVariant *parameter, gpointer da
 	gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
 	g_autoptr(GFile) folder = window->file ? g_file_get_parent(window->file) : NULL;
 	gtk_file_dialog_set_initial_folder(dialog, folder);
-	gtk_file_dialog_open_multiple(dialog, GTK_WINDOW(window->window), NULL, open_chosen_files, window);
+	gtk_file_dialog_open_multiple(dialog, GTK_WINDOW(window->window), NULL, open_chosen_files,
+		g_object_ref(window->window));
 }
 
 
@@ -240,106 +289,40 @@ static void frame_model(GSimpleAction *action, GVariant *parameter, gpointer dat
 }
 
 
-static gboolean *find_view_switch(const char *name) {
-	ViewOptions *options = get_view_options();
-	static const char *const NAMES[] = {"grid", "wireframe", "skeleton", "textures", "turntable"};
-	gboolean *switches[] = {&options->shows_grid, &options->shows_wireframe, &options->shows_skeleton,
-		&options->shows_textures, &options->is_turning};
-	for (guint index = 0; index < G_N_ELEMENTS(NAMES); index++)
-		if (g_strcmp0(NAMES[index], name) == 0)
-			return switches[index];
-	return NULL;
-}
-
-
-static void change_view_switch(GSimpleAction *action, GVariant *value, gpointer data) {
-	Window *window = data;
-	*find_view_switch(g_action_get_name(G_ACTION(action))) = g_variant_get_boolean(value);
-	g_simple_action_set_state(action, value);
-	save_view_options();
-	redraw_viewer(window->viewer);
-}
-
-
-static void change_lighting(GSimpleAction *action, GVariant *value, gpointer data) {
-	Window *window = data;
-	get_view_options()->lighting = find_option_name(LIGHTING_NAMES, LIGHTING_COUNT,
-		g_variant_get_string(value, NULL), LIGHTING_STUDIO);
-	g_simple_action_set_state(action, value);
-	save_view_options();
-	redraw_viewer(window->viewer);
-}
-
-
-static void change_background(GSimpleAction *action, GVariant *value, gpointer data) {
-	Window *window = data;
-	get_view_options()->background = find_option_name(BACKGROUND_NAMES, BACKGROUND_COUNT,
-		g_variant_get_string(value, NULL), BACKGROUND_CHARCOAL);
-	g_simple_action_set_state(action, value);
-	save_view_options();
-	redraw_viewer(window->viewer);
-}
-
-
-/* L and B step through the choices that the header bar's menus offer */
-static void step_choice(Window *window, const char *action_name, const char *const *names, int count, int current) {
-	const char *next = names[(current + 1) % count];
-	g_action_group_change_action_state(G_ACTION_GROUP(window->window), action_name, g_variant_new_string(next));
-}
-
-
-static void next_lighting(GSimpleAction *action, GVariant *parameter, gpointer data) {
-	step_choice(data, "lighting", LIGHTING_NAMES, LIGHTING_COUNT, get_view_options()->lighting);
-}
-
-
-static void next_background(GSimpleAction *action, GVariant *parameter, gpointer data) {
-	step_choice(data, "background", BACKGROUND_NAMES, BACKGROUND_COUNT, get_view_options()->background);
-}
-
-
 static void change_playing(GSimpleAction *action, GVariant *value, gpointer data) {
 	show_playing(data, g_variant_get_boolean(value));
 }
 
 
 static void add_actions(Window *window) {
-	ViewOptions *options = get_view_options();
 	static const GActionEntry ENTRIES[] = {
 		{"open", choose_files, NULL, NULL, NULL, {0}},
 		{"frame", frame_model, NULL, NULL, NULL, {0}},
-		{"grid", NULL, NULL, "true", change_view_switch, {0}},
-		{"wireframe", NULL, NULL, "false", change_view_switch, {0}},
-		{"skeleton", NULL, NULL, "false", change_view_switch, {0}},
-		{"textures", NULL, NULL, "true", change_view_switch, {0}},
-		{"turntable", NULL, NULL, "false", change_view_switch, {0}},
-		{"lighting", NULL, "s", "'studio'", change_lighting, {0}},
-		{"background", NULL, "s", "'charcoal'", change_background, {0}},
-		{"next-lighting", next_lighting, NULL, NULL, NULL, {0}},
-		{"next-background", next_background, NULL, NULL, NULL, {0}},
 		{"play", NULL, NULL, "false", change_playing, {0}},
 	};
 	GActionMap *map = G_ACTION_MAP(window->window);
 	g_action_map_add_action_entries(map, ENTRIES, G_N_ELEMENTS(ENTRIES), window);
-	static const char *const SWITCHES[] = {"grid", "wireframe", "skeleton", "textures", "turntable"};
-	for (guint index = 0; index < G_N_ELEMENTS(SWITCHES); index++)
-		g_simple_action_set_state(G_SIMPLE_ACTION(g_action_map_lookup_action(map, SWITCHES[index])),
-			g_variant_new_boolean(*find_view_switch(SWITCHES[index])));
-	g_simple_action_set_state(G_SIMPLE_ACTION(g_action_map_lookup_action(map, "lighting")),
-		g_variant_new_string(LIGHTING_NAMES[options->lighting]));
-	g_simple_action_set_state(G_SIMPLE_ACTION(g_action_map_lookup_action(map, "background")),
-		g_variant_new_string(BACKGROUND_NAMES[options->background]));
-	window->skeleton_action = G_SIMPLE_ACTION(g_action_map_lookup_action(map, "skeleton"));
 	window->play_action = G_SIMPLE_ACTION(g_action_map_lookup_action(map, "play"));
-	g_simple_action_set_enabled(window->skeleton_action, FALSE);
 	g_simple_action_set_enabled(window->play_action, FALSE);
+}
+
+
+/* The view takes these keys while it has the focus, which a click on it gives, so a focused button or a dialog
+ * keeps its own keys, such as Space pressing a button */
+static void add_view_keys(GtkWidget *view) {
+	GtkEventController *keys = gtk_shortcut_controller_new();
+	for (guint index = 0; index < G_N_ELEMENTS(VIEW_KEYS); index++)
+		gtk_shortcut_controller_add_shortcut(GTK_SHORTCUT_CONTROLLER(keys), gtk_shortcut_new(
+			gtk_shortcut_trigger_parse_string(VIEW_KEYS[index].key), gtk_named_action_new(VIEW_KEYS[index].action)));
+	gtk_widget_add_controller(view, keys);
+	gtk_widget_set_focusable(view, TRUE);
 }
 
 
 static GMenu *create_choice_menu(const char *action, const char *const *names, const char *const *titles, int count) {
 	GMenu *menu = g_menu_new();
 	for (int index = 0; index < count; index++) {
-		g_autofree char *detailed = g_strdup_printf("win.%s::%s", action, names[index]);
+		g_autofree char *detailed = g_strdup_printf("app.%s::%s", action, names[index]);
 		g_menu_append(menu, titles[index], detailed);
 	}
 	return menu;
@@ -380,11 +363,11 @@ static GtkWidget *create_header(Window *window) {
 	g_menu_append(everyday, TEXT_OPEN, "win.open");
 	g_menu_append(everyday, TEXT_FRAME, "win.frame");
 	g_autoptr(GMenu) view = g_menu_new();
-	g_menu_append(view, TEXT_GRID, "win.grid");
-	g_menu_append(view, TEXT_WIREFRAME, "win.wireframe");
-	g_menu_append(view, TEXT_SKELETON, "win.skeleton");
-	g_menu_append(view, TEXT_TEXTURES, "win.textures");
-	g_menu_append(view, TEXT_TURNTABLE, "win.turntable");
+	g_menu_append(view, TEXT_GRID, "app.grid");
+	g_menu_append(view, TEXT_WIREFRAME, "app.wireframe");
+	g_menu_append(view, TEXT_SKELETON, "app.skeleton");
+	g_menu_append(view, TEXT_TEXTURES, "app.textures");
+	g_menu_append(view, TEXT_TURNTABLE, "app.turntable");
 	g_autoptr(GMenu) submenus = g_menu_new();
 	g_menu_append_submenu(submenus, TEXT_VIEW, G_MENU_MODEL(view));
 	g_menu_append_submenu(submenus, TEXT_LIGHTING, G_MENU_MODEL(lighting));
@@ -405,13 +388,16 @@ static GtkWidget *create_header(Window *window) {
 		TEXT_LIGHTING_TOOLTIP, G_MENU_MODEL(lighting)));
 	GtkWidget *switches = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
 	gtk_widget_add_css_class(switches, "linked");
-	gtk_box_append(GTK_BOX(switches), create_toggle("crimson-grid-symbolic", TEXT_GRID_TOOLTIP, "win.grid"));
+	gtk_box_append(GTK_BOX(switches), create_toggle("crimson-grid-symbolic", TEXT_GRID_TOOLTIP, "app.grid"));
 	gtk_box_append(GTK_BOX(switches), create_toggle("crimson-wireframe-symbolic", TEXT_WIREFRAME_TOOLTIP,
-		"win.wireframe"));
-	gtk_box_append(GTK_BOX(switches), create_toggle("crimson-skeleton-symbolic", TEXT_SKELETON_TOOLTIP, "win.skeleton"));
-	gtk_box_append(GTK_BOX(switches), create_toggle("crimson-textures-symbolic", TEXT_TEXTURES_TOOLTIP, "win.textures"));
+		"app.wireframe"));
+	/* The skeleton switch is the same for every window, but only a model with a skeleton can show one */
+	window->skeleton_button = create_toggle("crimson-skeleton-symbolic", TEXT_SKELETON_TOOLTIP, "app.skeleton");
+	gtk_widget_set_sensitive(window->skeleton_button, FALSE);
+	gtk_box_append(GTK_BOX(switches), window->skeleton_button);
+	gtk_box_append(GTK_BOX(switches), create_toggle("crimson-textures-symbolic", TEXT_TEXTURES_TOOLTIP, "app.textures"));
 	gtk_box_append(GTK_BOX(switches), create_toggle("object-rotate-left-symbolic", TEXT_TURNTABLE_TOOLTIP,
-		"win.turntable"));
+		"app.turntable"));
 	adw_header_bar_pack_end(ADW_HEADER_BAR(header), switches);
 	GtkWidget *frame = gtk_button_new_from_icon_name("zoom-fit-best-symbolic");
 	gtk_widget_set_tooltip_text(frame, TEXT_FRAME_TOOLTIP);
@@ -436,6 +422,12 @@ static GtkWidget *create_animation_bar(Window *window) {
 	gtk_accessible_update_property(GTK_ACCESSIBLE(window->timeline), GTK_ACCESSIBLE_PROPERTY_LABEL, TEXT_TIMELINE,
 		-1);
 	g_signal_connect(window->timeline, "value-changed", G_CALLBACK(move_timeline), window);
+	GtkGesture *hold = gtk_gesture_click_new();
+	gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(hold), GTK_PHASE_CAPTURE);
+	g_signal_connect_swapped(hold, "pressed", G_CALLBACK(hold_timeline), window);
+	g_signal_connect_swapped(hold, "stopped", G_CALLBACK(release_timeline), window);
+	g_signal_connect_swapped(hold, "released", G_CALLBACK(release_timeline), window);
+	gtk_widget_add_controller(window->timeline, GTK_EVENT_CONTROLLER(hold));
 	window->time_label = gtk_label_new(NULL);
 	gtk_widget_add_css_class(window->time_label, "numeric");
 	window->animation_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_SMALL);
@@ -455,6 +447,7 @@ static GtkWidget *create_animation_bar(Window *window) {
 
 static GtkWidget *create_view(Window *window) {
 	window->viewer = create_viewer(follow_time, window);
+	add_view_keys(get_viewer_widget(window->viewer));
 	GtkWidget *overlay = gtk_overlay_new();
 	gtk_overlay_set_child(GTK_OVERLAY(overlay), get_viewer_widget(window->viewer));
 	window->spinner = create_loading_spinner();
@@ -501,19 +494,8 @@ static GtkWidget *create_content(Window *window) {
 }
 
 
-static gboolean drop_files(GtkDropTarget *target, const GValue *value, double x, double y, Window *window) {
-	GSList *files = gdk_file_list_get_files(g_value_get_boxed(value));
-	GApplication *application = G_APPLICATION(gtk_window_get_application(GTK_WINDOW(window->window)));
-	/* The first model let go over a window replaces its model, and each further one opens in a new window */
-	for (GSList *item = files; item; item = item->next) {
-		if (item == files)
-			open_window_file(window, item->data);
-		else
-			g_application_open(application, (GFile **)&item->data, 1, "");
-	}
-	gboolean has_files = files != NULL;
-	g_slist_free(files);
-	return has_files;
+static void open_dropped_files(GFile **files, guint count, gpointer window) {
+	open_files_here(window, files, count);
 }
 
 
@@ -523,12 +505,6 @@ static gboolean close_window(GtkWindow *gtk_window, Window *window) {
 	save_window_state(&geometry);
 	hide_closing_window(gtk_window);
 	return GDK_EVENT_PROPAGATE;
-}
-
-
-static void note_window_shown(GtkWidget *widget) {
-	note_startup_moment("Window shown");
-	note_first_frame(widget);
 }
 
 
@@ -550,16 +526,13 @@ Window *create_window(GtkApplication *application) {
 	window->window = adw_application_window_new(application);
 	g_object_set_data_full(G_OBJECT(window->window), "window", window, free_window);
 	gtk_window_set_title(GTK_WINDOW(window->window), TEXT_APPLICATION_NAME);
-	note_startup_moment("Window created");
+	watch_window_frames(window->window);
 	apply_window_geometry(GTK_WINDOW(window->window), &geometry);
 	add_actions(window);
 	adw_application_window_set_content(ADW_APPLICATION_WINDOW(window->window), create_content(window));
 	add_viewer_keys(window->viewer, window->window);
-	GtkDropTarget *drop = gtk_drop_target_new(GDK_TYPE_FILE_LIST, GDK_ACTION_COPY);
-	g_signal_connect(drop, "drop", G_CALLBACK(drop_files), window);
-	gtk_widget_add_controller(window->window, GTK_EVENT_CONTROLLER(drop));
+	add_file_drop(window->window, open_dropped_files, window);
 	g_signal_connect(window->window, "close-request", G_CALLBACK(close_window), window);
-	g_signal_connect(window->window, "map", G_CALLBACK(note_window_shown), NULL);
 	return window;
 }
 
@@ -569,7 +542,7 @@ GtkWindow *get_gtk_window(Window *window) {
 }
 
 
-static gboolean fade_in_empty_page(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
+static gboolean fade_in_empty_page(gpointer data) {
 	Window *window = data;
 	if (!window->is_started)
 		gtk_stack_set_visible_child_name(GTK_STACK(window->stack), "empty");
@@ -579,5 +552,10 @@ static gboolean fade_in_empty_page(GtkWidget *widget, GdkFrameClock *clock, gpoi
 
 void show_window_start(Window *window) {
 	if (!window->is_started)
-		gtk_widget_add_tick_callback(window->window, fade_in_empty_page, window, NULL);
+		run_after_frame(window->window, fade_in_empty_page, window, NULL);
+}
+
+
+void redraw_window(Window *window) {
+	redraw_viewer(window->viewer);
 }

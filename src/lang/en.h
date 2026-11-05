@@ -4,6 +4,10 @@
 #define TEXT_EMPTY_TITLE "Open a model"
 #define TEXT_EMPTY_DESCRIPTION "Drop a model here or press Ctrl+O"
 #define TEXT_ERROR_TITLE "This model could not be opened"
+/* The graphics version needed, then the one this computer has, such as OpenGL 3.3 and 3.1 */
+#define TEXT_OPENGL_NEEDED "OpenGL %s%d.%d is needed, and this computer has %d.%d"
+#define TEXT_NOT_LOCAL "Only files on this computer can be opened"
+#define TEXT_ERROR_DESCRIPTION "The file may be damaged, or in a format Crimson Mesh cannot read"
 #define TEXT_OPEN "Open..."
 #define TEXT_OPEN_TITLE "Open models"
 #define TEXT_OPEN_TOOLTIP "Open (Ctrl+O)"

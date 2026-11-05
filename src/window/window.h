@@ -11,3 +11,5 @@ gboolean has_window_file(Window *window);
 void open_window_file(Window *window, GFile *file);
 /* Fades the empty page in on the next frame when the window was opened without a model */
 void show_window_start(Window *window);
+/* Draws the view again, such as after a view option changed */
+void redraw_window(Window *window);

@@ -3,7 +3,7 @@
 #include <glib.h>
 
 #include "model/model.h"
-#include "window/view-options.h"
+#include "app/view-options.h"
 
 typedef struct Renderer Renderer;
 

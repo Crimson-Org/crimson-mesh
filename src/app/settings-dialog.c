@@ -2,7 +2,7 @@
 
 #include "lang/en.h"
 #include "app/settings-dialog.h"
-#include "window/view-options.h"
+#include "app/view-options.h"
 
 #define SPEED_STEP 10
 #define DIALOG_WIDTH 520
