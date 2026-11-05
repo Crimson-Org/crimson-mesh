@@ -11,13 +11,13 @@ typedef enum {
 	LIGHTING_COUNT,
 } Lighting;
 
-/* The colours behind the model */
+/* The colours behind the model, from dark to light */
 typedef enum {
-	BACKGROUND_CHARCOAL,
+	BACKGROUND_BLACK,
 	BACKGROUND_MIDNIGHT,
+	BACKGROUND_CHARCOAL,
 	BACKGROUND_STUDIO,
 	BACKGROUND_LIGHT,
-	BACKGROUND_BLACK,
 	BACKGROUND_COUNT,
 } Background;
 

@@ -1,4 +1,17 @@
-/* The animation controls float over the bottom of the model */
+/* The animation controls float over the bottom of the model as one rounded bar */
 .animation-bar {
-	margin: 18px;
+	margin: var(--spacing-wide);
+	padding: var(--spacing-small);
+	border-radius: var(--pill-radius);
+}
+
+/* The time keeps the same room from the bar's round end as the play button */
+.animation-time {
+	margin-right: var(--spacing-small);
+}
+
+/* The timeline's own end padding would leave wider gaps around it than between the other controls */
+.animation-bar scale {
+	padding-left: 0;
+	padding-right: 0;
 }

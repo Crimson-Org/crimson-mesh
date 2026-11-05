@@ -7,7 +7,14 @@
 /* The model's first view comes from the front right and a little above, the angle product photos use */
 #define FRAME_YAW (G_PI / 5)
 #define FRAME_PITCH (G_PI / 9)
-#define FRAME_MARGIN 1.15f
+/* The model's box fills this share of the view's height or width, whichever the box reaches first, so the model looks
+ * a little smaller than the box, with room for poses that reach outside the box */
+#define FRAME_FILL 0.8f
+#define BOX_CORNERS 8
+/* Each bit of a corner's number picks the box's far side along one axis */
+#define CORNER_X 1
+#define CORNER_Y 2
+#define CORNER_Z 4
 #define PITCH_LIMIT (G_PI / 2 - 0.01)
 #define ZOOM_STEP 0.12f
 /* The eye keeps at least this share of the model from the target, or zooming would stop */
@@ -17,14 +24,33 @@
 #define FAR_PLANE_SIZES 20
 
 
-void frame_camera(Camera *camera, Vector3 minimum, Vector3 maximum) {
+static Vector3 get_box_corner(Vector3 minimum, Vector3 maximum, int corner) {
+	return make_vector(corner & CORNER_X ? maximum.x : minimum.x, corner & CORNER_Y ? maximum.y : minimum.y,
+		corner & CORNER_Z ? maximum.z : minimum.z);
+}
+
+
+/* The eye backs off until every corner of the box is inside the view, seen from the framing angle, so a long model
+ * fills the width and a tall one the height */
+void frame_camera(Camera *camera, Vector3 minimum, Vector3 maximum, float aspect, float open_share) {
 	Vector3 size = subtract_vectors(maximum, minimum);
-	float radius = fmaxf(get_vector_length(size) / 2, SMALLEST_SIZE);
 	camera->target = scale_vector(add_vectors(minimum, maximum), 0.5f);
-	camera->distance = radius / sinf((float)FIELD_OF_VIEW / 2) * FRAME_MARGIN;
 	camera->yaw = (float)FRAME_YAW;
 	camera->pitch = (float)FRAME_PITCH;
-	camera->scale = radius * 2;
+	camera->scale = fmaxf(get_vector_length(size) / 2, SMALLEST_SIZE) * 2;
+	Vector3 forward, right, up;
+	get_camera_axes(camera, &forward, &right, &up);
+	float reach = tanf((float)FIELD_OF_VIEW / 2) * FRAME_FILL;
+	float reach_up = reach * open_share;
+	float reach_side = reach * aspect;
+	/* The eye starts on the box's bounding sphere, which also frames a box of no size, such as a single point */
+	camera->distance = camera->scale / 2;
+	for (int corner = 0; corner < BOX_CORNERS; corner++) {
+		Vector3 offset = subtract_vectors(get_box_corner(minimum, maximum, corner), camera->target);
+		float depth = dot_vectors(offset, forward);
+		camera->distance = fmaxf(camera->distance, fabsf(dot_vectors(offset, up)) / reach_up - depth);
+		camera->distance = fmaxf(camera->distance, fabsf(dot_vectors(offset, right)) / reach_side - depth);
+	}
 }
 
 
@@ -90,8 +116,10 @@ Matrix4 get_view_matrix(const Camera *camera) {
 
 
 /* The near plane follows the eye's distance so close-ups keep their depth precision */
-Matrix4 get_projection_matrix(const Camera *camera, float aspect) {
+Matrix4 get_projection_matrix(const Camera *camera, float aspect, float lift) {
 	float near = fmaxf(camera->distance * NEAR_PLANE_SHARE, camera->scale * SMALLEST_SIZE);
 	float far = camera->distance + camera->scale * FAR_PLANE_SIZES;
-	return get_perspective_matrix((float)FIELD_OF_VIEW, aspect, near, far);
+	Matrix4 projection = get_perspective_matrix((float)FIELD_OF_VIEW, aspect, near, far);
+	lift_perspective(&projection, lift);
+	return projection;
 }

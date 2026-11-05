@@ -10,6 +10,7 @@
 
 #include "lang/en.h"
 #include "model/model.h"
+#include "model/animation.h"
 
 /* Files that leave the timing out are played at the frame rate most exporters assume */
 #define DEFAULT_TICKS_PER_SECOND 25.0
@@ -395,15 +396,14 @@ static void add_animations(Model *model, GHashTable *names, const struct aiScene
 }
 
 
-/* The resting pose's bounds, with skinned vertices placed where their joints put them */
+/* The bounds of the pose the model is first shown in, which is the first animation's start since animations play by
+ * themselves, or the resting pose, with skinned vertices placed where their joints put them */
 static void measure_bounds(Model *model) {
 	model->minimum = make_vector(FLT_MAX, FLT_MAX, FLT_MAX);
 	model->maximum = make_vector(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-	Matrix4 *globals = g_new(Matrix4, model->nodes->len);
-	for (guint index = 0; index < model->nodes->len; index++) {
-		ModelNode *node = &g_array_index(model->nodes, ModelNode, index);
-		globals[index] = node->parent < 0 ? node->local : multiply_matrices(&globals[node->parent], &node->local);
-	}
+	Matrix4 *globals = g_new(Matrix4, MAX(model->nodes->len, 1));
+	const ModelAnimation *first = model->animations->len ? &g_array_index(model->animations, ModelAnimation, 0) : NULL;
+	pose_model(model, first, 0, globals);
 	for (guint index = 0; index < model->nodes->len; index++) {
 		ModelNode *node = &g_array_index(model->nodes, ModelNode, index);
 		for (guint mesh_index = 0; mesh_index < node->mesh_count; mesh_index++) {

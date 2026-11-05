@@ -130,6 +130,13 @@ Matrix4 get_perspective_matrix(float field_of_view, float aspect, float near, fl
 }
 
 
+/* The screen height grows with the depth, so the lift goes in the depth column of the height row */
+void lift_perspective(Matrix4 *matrix, float lift) {
+	const int depth_column = 2, height_row = 1;
+	matrix->values[depth_column * MATRIX_ORDER + height_row] = -lift;
+}
+
+
 Matrix4 get_look_at_matrix(Vector3 eye, Vector3 target, Vector3 up) {
 	Vector3 forward = normalize_vector(subtract_vectors(target, eye));
 	Vector3 side = normalize_vector(cross_vectors(forward, up));

@@ -59,6 +59,8 @@ struct Viewer {
 	gint64 last_frame;
 	ViewerTimeChanged time_changed;
 	gpointer data;
+	/* Pixels of the view's bottom under something else, such as the animation bar */
+	int cover;
 };
 
 
@@ -172,6 +174,32 @@ static void swap_models(Viewer *viewer) {
 }
 
 
+/* The share of the view's height above the cover, where the model is framed, and a view not laid out yet counts as a
+ * square with an open bottom */
+static float get_open_share(const Viewer *viewer) {
+	int height = gtk_widget_get_height(viewer->area);
+	return height > viewer->cover ? (float)(height - viewer->cover) / (float)height : 1;
+}
+
+
+static float get_viewer_aspect(const Viewer *viewer) {
+	int height = gtk_widget_get_height(viewer->area);
+	return height > 0 ? (float)gtk_widget_get_width(viewer->area) / (float)height : 1;
+}
+
+
+/* The middle of the open space sits half the cover above the view's middle */
+static float get_viewer_lift(const Viewer *viewer) {
+	return 1 - get_open_share(viewer);
+}
+
+
+static void frame_model(Viewer *viewer) {
+	frame_camera(&viewer->camera, viewer->model->minimum, viewer->model->maximum, get_viewer_aspect(viewer),
+		get_open_share(viewer));
+}
+
+
 static gboolean render_area(GtkGLArea *area, GdkGLContext *context, Viewer *viewer) {
 	if (!viewer->renderer)
 		return TRUE;
@@ -188,7 +216,8 @@ static gboolean render_area(GtkGLArea *area, GdkGLContext *context, Viewer *view
 		Vector3 right, up;
 		get_camera_axes(&viewer->camera, &frame.forward, &right, &up);
 		frame.view = get_view_matrix(&viewer->camera);
-		frame.projection = get_projection_matrix(&viewer->camera, (float)width / (float)height);
+		frame.projection = get_projection_matrix(&viewer->camera, (float)width / (float)height,
+			get_viewer_lift(viewer));
 		frame.eye = get_camera_eye(&viewer->camera);
 		frame.globals = viewer->globals;
 		frame.joints = viewer->joints;
@@ -348,7 +377,7 @@ void show_viewer_model(Viewer *viewer, Model *model) {
 	viewer->globals = model ? g_new(Matrix4, MAX(model->nodes->len, 1)) : NULL;
 	viewer->joints = model ? g_new(Matrix4, MAX(model->joints->len, 1)) : NULL;
 	if (model)
-		frame_camera(&viewer->camera, model->minimum, model->maximum);
+		frame_model(viewer);
 	redraw_viewer(viewer);
 }
 
@@ -356,8 +385,14 @@ void show_viewer_model(Viewer *viewer, Model *model) {
 void frame_viewer(Viewer *viewer) {
 	if (!viewer->model)
 		return;
-	frame_camera(&viewer->camera, viewer->model->minimum, viewer->model->maximum);
+	frame_model(viewer);
 	redraw_viewer(viewer);
+}
+
+
+void set_viewer_cover(Viewer *viewer, int cover) {
+	viewer->cover = cover;
+	frame_viewer(viewer);
 }
 
 

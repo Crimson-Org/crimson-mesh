@@ -12,7 +12,9 @@ typedef struct {
 	float scale;
 } Camera;
 
-void frame_camera(Camera *camera, Vector3 minimum, Vector3 maximum);
+/* Looks at the box from the front right and a little above, as close as the view allows, given the view's width to
+ * height ratio and the share of the view's height left open above a covered bottom */
+void frame_camera(Camera *camera, Vector3 minimum, Vector3 maximum, float aspect, float open_share);
 Vector3 get_camera_eye(const Camera *camera);
 /* The direction the eye looks, and the screen's right and up directions in the world */
 void get_camera_axes(const Camera *camera, Vector3 *forward, Vector3 *right, Vector3 *up);
@@ -25,4 +27,5 @@ void zoom_camera(Camera *camera, float steps);
 /* Moves eye and target together, by model sizes along the view, the screen's right and the world's up */
 void fly_camera(Camera *camera, float forward, float right, float up);
 Matrix4 get_view_matrix(const Camera *camera);
-Matrix4 get_projection_matrix(const Camera *camera, float aspect);
+/* The lift moves the picture up, by a share of half the view's height, to centre the model above a covered bottom */
+Matrix4 get_projection_matrix(const Camera *camera, float aspect, float lift);

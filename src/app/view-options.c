@@ -7,7 +7,7 @@
 #define FLY_SPEED_KEY "fly-speed"
 
 const char *const LIGHTING_NAMES[LIGHTING_COUNT] = {"studio", "daylight", "headlight", "flat"};
-const char *const BACKGROUND_NAMES[BACKGROUND_COUNT] = {"charcoal", "midnight", "studio", "light", "black"};
+const char *const BACKGROUND_NAMES[BACKGROUND_COUNT] = {"black", "midnight", "charcoal", "studio", "light"};
 
 /* Each switch once, with the name its action and its settings key share */
 static const struct {

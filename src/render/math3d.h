@@ -46,6 +46,8 @@ Matrix4 get_identity_matrix(void);
 Matrix4 multiply_matrices(const Matrix4 *a, const Matrix4 *b);
 Matrix4 compose_matrix(Vector3 position, Quaternion rotation, Vector3 scale);
 Matrix4 get_perspective_matrix(float field_of_view, float aspect, float near, float far);
+/* Moves what a perspective shows up the screen, by a share of half the screen's height */
+void lift_perspective(Matrix4 *matrix, float lift);
 Matrix4 get_look_at_matrix(Vector3 eye, Vector3 target, Vector3 up);
 Vector3 transform_point(const Matrix4 *matrix, Vector3 point);
 Vector3 get_matrix_position(const Matrix4 *matrix);

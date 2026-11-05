@@ -14,8 +14,20 @@
 #include "common/widgets/spacing.h"
 
 #define TIMELINE_WIDTH 320
+/* A narrow window folds the view switches into one menu and shortens the timeline, down to the window's smallest
+ * size */
+#define NARROW_WINDOW "max-width: 800sp"
+#define NARROW_TIMELINE_WIDTH 160
+#define MINIMUM_WIDTH 480
+#define MINIMUM_HEIGHT 360
 #define TIMELINE_STEP 0.01
 #define SUFFIX_PATTERN_START "*."
+#define HOME_FOLDER_MARK "~"
+/* A deep folder shows the folder's start and last few folders, with the ones between left out */
+#define SHOWN_LAST_FOLDERS 2
+#define LEFT_OUT_FOLDERS_MARK "..."
+#define VIEW_PAGE "view"
+#define ACCEL_ATTRIBUTE "accel"
 
 /* Keys that act on the view, which reach it only when no focused button or dialog took them */
 static const struct {
@@ -28,7 +40,11 @@ static const struct {
 
 struct Window {
 	GtkWidget *window, *title, *stack, *spinner, *error_page;
-	GtkWidget *animation_bar, *animation_list, *timeline, *time_label, *play_button, *skeleton_button;
+	/* The header's controls, shown only while a model is in view, since the other pages lead on with Open */
+	GtkWidget *view_switches, *view_choices;
+	/* The switches stand in the header in a wide window and fold into the view menu in a narrow one */
+	GtkWidget *switch_group, *view_menu_button;
+	GtkWidget *animation_bar, *animation_list, *timeline, *time_label, *duration_label, *play_button, *skeleton_button;
 	GSimpleAction *play_action;
 	Viewer *viewer;
 	GFile *file;
@@ -53,14 +69,27 @@ static const char *const LIGHTING_TITLES[LIGHTING_COUNT] = {
 	TEXT_LIGHT_STUDIO, TEXT_LIGHT_DAYLIGHT, TEXT_LIGHT_HEADLIGHT, TEXT_LIGHT_FLAT,
 };
 static const char *const BACKGROUND_TITLES[BACKGROUND_COUNT] = {
-	TEXT_BACKGROUND_CHARCOAL, TEXT_BACKGROUND_MIDNIGHT, TEXT_BACKGROUND_STUDIO, TEXT_BACKGROUND_LIGHT,
-	TEXT_BACKGROUND_BLACK,
+	TEXT_BACKGROUND_BLACK, TEXT_BACKGROUND_MIDNIGHT, TEXT_BACKGROUND_CHARCOAL, TEXT_BACKGROUND_STUDIO,
+	TEXT_BACKGROUND_LIGHT,
 };
 
 
 static void update_time_label(Window *window, float time) {
-	g_autofree char *text = g_strdup_printf(TEXT_TIME, time, get_viewer_duration(window->viewer));
+	g_autofree char *text = g_strdup_printf(TEXT_TIME, time);
 	gtk_label_set_text(GTK_LABEL(window->time_label), text);
+}
+
+
+/* The time label stays as wide as the longest time, so the bar stays still while the animation plays, and the
+ * digits all take the same width */
+static void show_duration(Window *window, float duration) {
+	g_autofree char *longest = g_strdup_printf(TEXT_TIME, duration);
+	g_autoptr(PangoLayout) layout = gtk_widget_create_pango_layout(window->time_label, longest);
+	int width = 0;
+	pango_layout_get_pixel_size(layout, &width, NULL);
+	gtk_widget_set_size_request(window->time_label, width, -1);
+	g_autofree char *text = g_strdup_printf(TEXT_DURATION, duration);
+	gtk_label_set_text(GTK_LABEL(window->duration_label), text);
 }
 
 
@@ -82,6 +111,7 @@ static void show_animation_range(Window *window) {
 	gtk_range_set_range(GTK_RANGE(window->timeline), 0, MAX(duration, TIMELINE_STEP));
 	gtk_range_set_value(GTK_RANGE(window->timeline), 0);
 	window->is_following_time = FALSE;
+	show_duration(window, duration);
 	update_time_label(window, 0);
 }
 
@@ -120,10 +150,19 @@ static void show_playing(Window *window, gboolean is_playing) {
 }
 
 
+/* The bar's whole height, margins included, which the model is framed above */
+static int measure_animation_bar(Window *window) {
+	int height = 0;
+	gtk_widget_measure(window->animation_bar, GTK_ORIENTATION_VERTICAL, -1, NULL, &height, NULL, NULL);
+	return height;
+}
+
+
 /* The bar appears only for models that move, listing their animations when there are several */
 static void show_animations(Window *window, const Model *model) {
 	guint count = model ? model->animations->len : 0;
 	gtk_widget_set_visible(window->animation_bar, count > 0);
+	set_viewer_cover(window->viewer, count > 0 ? measure_animation_bar(window) : 0);
 	g_simple_action_set_enabled(window->play_action, count > 0);
 	show_playing(window, count > 0);
 	if (count == 0)
@@ -138,10 +177,55 @@ static void show_animations(Window *window, const Model *model) {
 }
 
 
-static void show_model_summary(Window *window, const Model *model) {
-	g_autofree char *triangles = format_count(model->triangle_count);
-	g_autofree char *summary = g_strdup_printf(TEXT_MODEL_SUMMARY, model->format, triangles);
-	adw_window_title_set_subtitle(ADW_WINDOW_TITLE(window->title), summary);
+/* The folder as people write it, with the home folder as ~ */
+static char *get_display_folder(GFile *file) {
+	g_autoptr(GFile) parent = g_file_get_parent(file);
+	g_autofree char *path = parent ? g_file_get_parse_name(parent) : g_strdup("");
+	const char *home = g_get_home_dir();
+	gsize home_length = strlen(home);
+	if (g_str_has_prefix(path, home) && (path[home_length] == G_DIR_SEPARATOR || path[home_length] == 0))
+		return g_strconcat(HOME_FOLDER_MARK, path + home_length, NULL);
+	return g_steal_pointer(&path);
+}
+
+
+/* Such as ~/.../tmp/models, which keeps the subtitle short enough to sit centred under the title */
+static char *shorten_folder(const char *folder) {
+	g_auto(GStrv) parts = g_strsplit(folder, G_DIR_SEPARATOR_S, -1);
+	guint count = g_strv_length(parts);
+	/* The start, the mark and the last folders only save room when they replace two folders or more */
+	const guint least_left_out = 2;
+	if (count < 1 + SHOWN_LAST_FOLDERS + least_left_out)
+		return g_strdup(folder);
+	g_autofree char *last = g_strjoinv(G_DIR_SEPARATOR_S, parts + count - SHOWN_LAST_FOLDERS);
+	return g_strjoin(G_DIR_SEPARATOR_S, parts[0], LEFT_OUT_FOLDERS_MARK, last, NULL);
+}
+
+
+/* The subtitle always names the model's folder, after the model's kind and size, or while the model loads, and the
+ * title's tooltip names the whole folder */
+static void show_model_place(Window *window, const Model *model) {
+	g_autofree char *whole_folder = get_display_folder(window->file);
+	gtk_widget_set_tooltip_text(window->title, whole_folder);
+	g_autofree char *folder = shorten_folder(whole_folder);
+	g_autofree char *triangles = model ? format_count(model->triangle_count) : NULL;
+	g_autofree char *place = model ? g_strdup_printf(TEXT_MODEL_SUMMARY, model->format, triangles, folder)
+		: window->loading ? g_strdup_printf(TEXT_LOADING, folder) : g_strdup(folder);
+	adw_window_title_set_subtitle(ADW_WINDOW_TITLE(window->title), place);
+}
+
+
+/* The view controls only show with the view, and fade with the page unless the page switches at once */
+static void show_page(Window *window, const char *name, GtkStackTransitionType transition) {
+	gboolean is_view = g_strcmp0(name, VIEW_PAGE) == 0;
+	GtkRevealerTransitionType fade = transition == GTK_STACK_TRANSITION_TYPE_NONE ? GTK_REVEALER_TRANSITION_TYPE_NONE
+		: GTK_REVEALER_TRANSITION_TYPE_CROSSFADE;
+	GtkWidget *controls[] = {window->view_switches, window->view_choices};
+	for (guint index = 0; index < G_N_ELEMENTS(controls); index++) {
+		gtk_revealer_set_transition_type(GTK_REVEALER(controls[index]), fade);
+		gtk_revealer_set_reveal_child(GTK_REVEALER(controls[index]), is_view);
+	}
+	gtk_stack_set_visible_child_full(GTK_STACK(window->stack), name, transition);
 }
 
 
@@ -170,16 +254,16 @@ static void finish_loading(GObject *source, GAsyncResult *result, gpointer data)
 		/* The reader's own words name the path and its internals, which belong in the log */
 		g_message("Model could not be opened: %s", error->message);
 		adw_status_page_set_description(ADW_STATUS_PAGE(window->error_page), TEXT_ERROR_DESCRIPTION);
-		adw_window_title_set_subtitle(ADW_WINDOW_TITLE(window->title), NULL);
+		show_model_place(window, NULL);
 		/* The load's result is a change of data, which switches without a fade */
-		gtk_stack_set_visible_child_full(GTK_STACK(window->stack), "error", GTK_STACK_TRANSITION_TYPE_NONE);
+		show_page(window, "error", GTK_STACK_TRANSITION_TYPE_NONE);
 		return;
 	}
 	if (!has_noted_model)
 		note_startup_moment("Model read");
 	has_noted_model = TRUE;
 	gtk_widget_set_sensitive(window->skeleton_button, model->has_skeleton);
-	show_model_summary(window, model);
+	show_model_place(window, model);
 	show_viewer_model(window->viewer, model);
 	show_animations(window, model);
 	gtk_widget_grab_focus(get_viewer_widget(window->viewer));
@@ -220,13 +304,13 @@ void open_window_file(Window *window, GFile *file) {
 	window->is_started = TRUE;
 	g_autofree char *name = g_file_get_basename(file);
 	adw_window_title_set_title(ADW_WINDOW_TITLE(window->title), name);
-	adw_window_title_set_subtitle(ADW_WINDOW_TITLE(window->title), TEXT_LOADING);
 	gtk_window_set_title(GTK_WINDOW(window->window), name);
 	show_viewer_model(window->viewer, NULL);
 	show_animations(window, NULL);
 	gtk_widget_set_visible(window->spinner, TRUE);
-	gtk_stack_set_visible_child_name(GTK_STACK(window->stack), "view");
+	show_page(window, VIEW_PAGE, gtk_stack_get_transition_type(GTK_STACK(window->stack)));
 	window->loading = g_cancellable_new();
+	show_model_place(window, NULL);
 	LoadRequest *request = g_new0(LoadRequest, 1);
 	request->window = window;
 	request->cancellable = g_object_ref(window->loading);
@@ -329,11 +413,78 @@ static GMenu *create_choice_menu(const char *action, const char *const *names, c
 }
 
 
+static const char *find_view_key(const char *action) {
+	for (guint index = 0; index < G_N_ELEMENTS(VIEW_KEYS); index++)
+		if (g_strcmp0(VIEW_KEYS[index].action, action) == 0)
+			return VIEW_KEYS[index].key;
+	return NULL;
+}
+
+
+/* A view action's menu item shows the action's key, as items with application shortcuts do */
+static void append_view_item(GMenu *menu, const char *label, const char *action) {
+	g_autoptr(GMenuItem) item = g_menu_item_new(label, action);
+	const char *key = find_view_key(action);
+	if (key)
+		g_menu_item_set_attribute(item, ACCEL_ATTRIBUTE, "s", key);
+	g_menu_append_item(menu, item);
+}
+
+
+static GMenu *create_view_menu(void) {
+	GMenu *view = g_menu_new();
+	append_view_item(view, TEXT_GRID, "app.grid");
+	append_view_item(view, TEXT_WIREFRAME, "app.wireframe");
+	append_view_item(view, TEXT_SKELETON, "app.skeleton");
+	append_view_item(view, TEXT_TEXTURES, "app.textures");
+	append_view_item(view, TEXT_TURNTABLE, "app.turntable");
+	return view;
+}
+
+
+/* Lighting and background share one button, each list of choices under a heading */
+static GMenu *create_look_menu(GMenuModel *lighting, GMenuModel *backgrounds) {
+	GMenu *looks = g_menu_new();
+	g_menu_append_section(looks, TEXT_LIGHTING, lighting);
+	g_menu_append_section(looks, TEXT_BACKGROUND, backgrounds);
+	return looks;
+}
+
+
+/* Laid out as Crimson Code's menu, the everyday commands first, then how the model is seen, then the program */
+static GMenu *create_main_menu(GMenuModel *view, GMenuModel *lighting, GMenuModel *backgrounds) {
+	g_autoptr(GMenu) everyday = g_menu_new();
+	g_menu_append(everyday, TEXT_OPEN, "win.open");
+	g_autoptr(GMenu) submenus = g_menu_new();
+	append_view_item(submenus, TEXT_FRAME, "win.frame");
+	g_menu_append_submenu(submenus, TEXT_VIEW, view);
+	g_menu_append_submenu(submenus, TEXT_LIGHTING, lighting);
+	g_menu_append_submenu(submenus, TEXT_BACKGROUND, backgrounds);
+	g_autoptr(GMenu) program = g_menu_new();
+	g_menu_append(program, TEXT_SETTINGS, "app.settings");
+	g_menu_append(program, TEXT_ABOUT, "app.about");
+	g_menu_append(program, TEXT_QUIT, "app.quit");
+	GMenu *menu = g_menu_new();
+	g_menu_append_section(menu, NULL, G_MENU_MODEL(everyday));
+	g_menu_append_section(menu, NULL, G_MENU_MODEL(submenus));
+	g_menu_append_section(menu, NULL, G_MENU_MODEL(program));
+	return menu;
+}
+
+
 static GtkWidget *create_menu_button(const char *icon, const char *tooltip, GMenuModel *menu) {
 	GtkWidget *button = gtk_menu_button_new();
 	gtk_menu_button_set_icon_name(GTK_MENU_BUTTON(button), icon);
 	gtk_menu_button_set_menu_model(GTK_MENU_BUTTON(button), menu);
 	gtk_widget_set_tooltip_text(button, tooltip);
+	return button;
+}
+
+
+static GtkWidget *create_button(const char *icon, const char *tooltip, const char *action) {
+	GtkWidget *button = gtk_button_new_from_icon_name(icon);
+	gtk_widget_set_tooltip_text(button, tooltip);
+	gtk_actionable_set_action_name(GTK_ACTIONABLE(button), action);
 	return button;
 }
 
@@ -347,73 +498,81 @@ static GtkWidget *create_toggle(const char *icon, const char *tooltip, const cha
 }
 
 
+/* Controls that belong together sit close, and groups keep the header's wider gap between them */
+static GtkWidget *create_group(GtkWidget *const *controls, guint count) {
+	GtkWidget *group = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_HAIRLINE);
+	for (guint index = 0; index < count; index++)
+		gtk_box_append(GTK_BOX(group), controls[index]);
+	return group;
+}
+
+
+/* The view controls fade as long as the pages do, so both arrive together */
+static GtkWidget *create_view_controls(Window *window, GtkWidget *child) {
+	GtkWidget *revealer = gtk_revealer_new();
+	gtk_revealer_set_transition_duration(GTK_REVEALER(revealer),
+		gtk_stack_get_transition_duration(GTK_STACK(window->stack)));
+	gtk_revealer_set_child(GTK_REVEALER(revealer), child);
+	return revealer;
+}
+
+
+/* What the model shows sits by Open, and the camera, lighting and backdrop sit by the menu */
 static GtkWidget *create_header(Window *window) {
 	GtkWidget *header = adw_header_bar_new();
 	window->title = adw_window_title_new(TEXT_APPLICATION_NAME, NULL);
 	adw_header_bar_set_title_widget(ADW_HEADER_BAR(header), window->title);
-	GtkWidget *open = gtk_button_new_from_icon_name("document-open-symbolic");
+	GtkWidget *open = gtk_button_new_with_label(TEXT_OPEN);
 	gtk_widget_set_tooltip_text(open, TEXT_OPEN_TOOLTIP);
 	gtk_actionable_set_action_name(GTK_ACTIONABLE(open), "win.open");
-	adw_header_bar_pack_start(ADW_HEADER_BAR(header), open);
-	g_autoptr(GMenu) lighting = create_choice_menu("lighting", LIGHTING_NAMES, LIGHTING_TITLES, LIGHTING_COUNT);
-	g_autoptr(GMenu) backgrounds = create_choice_menu("background", BACKGROUND_NAMES, BACKGROUND_TITLES,
-		BACKGROUND_COUNT);
-	/* Laid out as Crimson Code's menu, the everyday commands first, the rest in submenus, then the program */
-	g_autoptr(GMenu) everyday = g_menu_new();
-	g_menu_append(everyday, TEXT_OPEN, "win.open");
-	g_menu_append(everyday, TEXT_FRAME, "win.frame");
-	g_autoptr(GMenu) view = g_menu_new();
-	g_menu_append(view, TEXT_GRID, "app.grid");
-	g_menu_append(view, TEXT_WIREFRAME, "app.wireframe");
-	g_menu_append(view, TEXT_SKELETON, "app.skeleton");
-	g_menu_append(view, TEXT_TEXTURES, "app.textures");
-	g_menu_append(view, TEXT_TURNTABLE, "app.turntable");
-	g_autoptr(GMenu) submenus = g_menu_new();
-	g_menu_append_submenu(submenus, TEXT_VIEW, G_MENU_MODEL(view));
-	g_menu_append_submenu(submenus, TEXT_LIGHTING, G_MENU_MODEL(lighting));
-	g_menu_append_submenu(submenus, TEXT_BACKGROUND, G_MENU_MODEL(backgrounds));
-	g_autoptr(GMenu) program = g_menu_new();
-	g_menu_append(program, TEXT_SETTINGS, "app.settings");
-	g_menu_append(program, TEXT_ABOUT, "app.about");
-	g_menu_append(program, TEXT_QUIT, "app.quit");
-	g_autoptr(GMenu) menu = g_menu_new();
-	g_menu_append_section(menu, NULL, G_MENU_MODEL(everyday));
-	g_menu_append_section(menu, NULL, G_MENU_MODEL(submenus));
-	g_menu_append_section(menu, NULL, G_MENU_MODEL(program));
-	adw_header_bar_pack_end(ADW_HEADER_BAR(header), create_menu_button("open-menu-symbolic", TEXT_MENU,
-		G_MENU_MODEL(menu)));
-	adw_header_bar_pack_end(ADW_HEADER_BAR(header), create_menu_button("crimson-background-symbolic",
-		TEXT_BACKGROUND_TOOLTIP, G_MENU_MODEL(backgrounds)));
-	adw_header_bar_pack_end(ADW_HEADER_BAR(header), create_menu_button("display-brightness-symbolic",
-		TEXT_LIGHTING_TOOLTIP, G_MENU_MODEL(lighting)));
-	GtkWidget *switches = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-	gtk_widget_add_css_class(switches, "linked");
-	gtk_box_append(GTK_BOX(switches), create_toggle("crimson-grid-symbolic", TEXT_GRID_TOOLTIP, "app.grid"));
-	gtk_box_append(GTK_BOX(switches), create_toggle("crimson-wireframe-symbolic", TEXT_WIREFRAME_TOOLTIP,
-		"app.wireframe"));
 	/* The skeleton switch is the same for every window, but only a model with a skeleton can show one */
 	window->skeleton_button = create_toggle("crimson-skeleton-symbolic", TEXT_SKELETON_TOOLTIP, "app.skeleton");
 	gtk_widget_set_sensitive(window->skeleton_button, FALSE);
-	gtk_box_append(GTK_BOX(switches), window->skeleton_button);
-	gtk_box_append(GTK_BOX(switches), create_toggle("crimson-textures-symbolic", TEXT_TEXTURES_TOOLTIP, "app.textures"));
-	gtk_box_append(GTK_BOX(switches), create_toggle("object-rotate-left-symbolic", TEXT_TURNTABLE_TOOLTIP,
-		"app.turntable"));
-	adw_header_bar_pack_end(ADW_HEADER_BAR(header), switches);
-	GtkWidget *frame = gtk_button_new_from_icon_name("zoom-fit-best-symbolic");
-	gtk_widget_set_tooltip_text(frame, TEXT_FRAME_TOOLTIP);
-	gtk_actionable_set_action_name(GTK_ACTIONABLE(frame), "win.frame");
-	adw_header_bar_pack_end(ADW_HEADER_BAR(header), frame);
+	GtkWidget *const shown[] = {
+		create_toggle("crimson-grid-symbolic", TEXT_GRID_TOOLTIP, "app.grid"),
+		create_toggle("crimson-wireframe-symbolic", TEXT_WIREFRAME_TOOLTIP, "app.wireframe"),
+		window->skeleton_button,
+		create_toggle("crimson-textures-symbolic", TEXT_TEXTURES_TOOLTIP, "app.textures"),
+	};
+	g_autoptr(GMenu) view = create_view_menu();
+	window->switch_group = create_group(shown, G_N_ELEMENTS(shown));
+	window->view_menu_button = create_menu_button("view-reveal-symbolic", TEXT_VIEW_TOOLTIP, G_MENU_MODEL(view));
+	gtk_widget_set_visible(window->view_menu_button, FALSE);
+	GtkWidget *switches = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_NORMAL);
+	gtk_box_append(GTK_BOX(switches), open);
+	gtk_box_append(GTK_BOX(switches), window->switch_group);
+	gtk_box_append(GTK_BOX(switches), window->view_menu_button);
+	window->view_switches = create_view_controls(window, switches);
+	adw_header_bar_pack_start(ADW_HEADER_BAR(header), window->view_switches);
+	g_autoptr(GMenu) lighting = create_choice_menu("lighting", LIGHTING_NAMES, LIGHTING_TITLES, LIGHTING_COUNT);
+	g_autoptr(GMenu) backgrounds = create_choice_menu("background", BACKGROUND_NAMES, BACKGROUND_TITLES,
+		BACKGROUND_COUNT);
+	g_autoptr(GMenu) looks = create_look_menu(G_MENU_MODEL(lighting), G_MENU_MODEL(backgrounds));
+	g_autoptr(GMenu) menu = create_main_menu(G_MENU_MODEL(view), G_MENU_MODEL(lighting), G_MENU_MODEL(backgrounds));
+	adw_header_bar_pack_end(ADW_HEADER_BAR(header), create_menu_button("open-menu-symbolic", TEXT_MENU,
+		G_MENU_MODEL(menu)));
+	GtkWidget *const camera[] = {
+		create_button("crimson-frame-symbolic", TEXT_FRAME_TOOLTIP, "win.frame"),
+		create_toggle("crimson-turntable-symbolic", TEXT_TURNTABLE_TOOLTIP, "app.turntable"),
+	};
+	GtkWidget *choices = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_NORMAL);
+	gtk_box_append(GTK_BOX(choices), create_group(camera, G_N_ELEMENTS(camera)));
+	gtk_box_append(GTK_BOX(choices), create_menu_button("crimson-look-symbolic", TEXT_LOOK_TOOLTIP,
+		G_MENU_MODEL(looks)));
+	window->view_choices = create_view_controls(window, choices);
+	gtk_widget_set_margin_end(window->view_choices, SPACING_SMALL);
+	adw_header_bar_pack_end(ADW_HEADER_BAR(header), window->view_choices);
 	return header;
 }
 
 
 /* Floating video player style controls along the bottom of the view */
 static GtkWidget *create_animation_bar(Window *window) {
-	window->play_button = gtk_toggle_button_new();
-	gtk_button_set_icon_name(GTK_BUTTON(window->play_button), "media-playback-start-symbolic");
-	gtk_widget_set_tooltip_text(window->play_button, TEXT_PLAY);
-	gtk_actionable_set_action_name(GTK_ACTIONABLE(window->play_button), "win.play");
+	window->play_button = create_toggle("media-playback-start-symbolic", TEXT_PLAY, "win.play");
+	gtk_widget_add_css_class(window->play_button, "circular");
+	gtk_widget_add_css_class(window->play_button, "play-button");
 	window->animation_list = gtk_drop_down_new(NULL, NULL);
+	gtk_widget_add_css_class(window->animation_list, "flat");
 	gtk_widget_set_tooltip_text(window->animation_list, TEXT_ANIMATION);
 	g_signal_connect(window->animation_list, "notify::selected", G_CALLBACK(choose_animation), window);
 	window->timeline = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, 1, TIMELINE_STEP);
@@ -429,8 +588,16 @@ static GtkWidget *create_animation_bar(Window *window) {
 	g_signal_connect_swapped(hold, "released", G_CALLBACK(release_timeline), window);
 	gtk_widget_add_controller(window->timeline, GTK_EVENT_CONTROLLER(hold));
 	window->time_label = gtk_label_new(NULL);
+	gtk_label_set_xalign(GTK_LABEL(window->time_label), 1);
 	gtk_widget_add_css_class(window->time_label, "numeric");
-	window->animation_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_SMALL);
+	window->duration_label = gtk_label_new(NULL);
+	gtk_widget_add_css_class(window->duration_label, "numeric");
+	gtk_widget_add_css_class(window->duration_label, "dimmed");
+	GtkWidget *times = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_TIGHT);
+	gtk_widget_add_css_class(times, "animation-time");
+	gtk_box_append(GTK_BOX(times), window->time_label);
+	gtk_box_append(GTK_BOX(times), window->duration_label);
+	window->animation_bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SPACING_NORMAL);
 	gtk_widget_add_css_class(window->animation_bar, "toolbar");
 	gtk_widget_add_css_class(window->animation_bar, "osd");
 	gtk_widget_add_css_class(window->animation_bar, "animation-bar");
@@ -439,7 +606,7 @@ static GtkWidget *create_animation_bar(Window *window) {
 	gtk_box_append(GTK_BOX(window->animation_bar), window->play_button);
 	gtk_box_append(GTK_BOX(window->animation_bar), window->animation_list);
 	gtk_box_append(GTK_BOX(window->animation_bar), window->timeline);
-	gtk_box_append(GTK_BOX(window->animation_bar), window->time_label);
+	gtk_box_append(GTK_BOX(window->animation_bar), times);
 	gtk_widget_set_visible(window->animation_bar, FALSE);
 	return window->animation_bar;
 }
@@ -460,32 +627,37 @@ static GtkWidget *create_view(Window *window) {
 }
 
 
-static GtkWidget *create_empty_page(void) {
+/* The empty and error pages both lead on with Open */
+static GtkWidget *create_status_page(const char *icon, const char *title) {
 	GtkWidget *button = gtk_button_new_with_label(TEXT_OPEN);
 	gtk_actionable_set_action_name(GTK_ACTIONABLE(button), "win.open");
 	gtk_widget_set_halign(button, GTK_ALIGN_CENTER);
 	gtk_widget_add_css_class(button, "pill");
 	gtk_widget_add_css_class(button, "suggested-action");
 	GtkWidget *page = adw_status_page_new();
-	adw_status_page_set_icon_name(ADW_STATUS_PAGE(page), get_application_identity()->id);
-	adw_status_page_set_title(ADW_STATUS_PAGE(page), TEXT_EMPTY_TITLE);
-	adw_status_page_set_description(ADW_STATUS_PAGE(page), TEXT_EMPTY_DESCRIPTION);
+	adw_status_page_set_icon_name(ADW_STATUS_PAGE(page), icon);
+	adw_status_page_set_title(ADW_STATUS_PAGE(page), title);
 	adw_status_page_set_child(ADW_STATUS_PAGE(page), button);
 	return page;
 }
 
 
+static GtkWidget *create_empty_page(void) {
+	GtkWidget *page = create_status_page(get_application_identity()->id, TEXT_EMPTY_TITLE);
+	adw_status_page_set_description(ADW_STATUS_PAGE(page), TEXT_EMPTY_DESCRIPTION);
+	return page;
+}
+
+
 static GtkWidget *create_content(Window *window) {
-	window->error_page = adw_status_page_new();
-	adw_status_page_set_icon_name(ADW_STATUS_PAGE(window->error_page), "dialog-error-symbolic");
-	adw_status_page_set_title(ADW_STATUS_PAGE(window->error_page), TEXT_ERROR_TITLE);
+	window->error_page = create_status_page("crimson-model-broken-symbolic", TEXT_ERROR_TITLE);
 	window->stack = gtk_stack_new();
 	gtk_stack_set_transition_type(GTK_STACK(window->stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
 	/* The window opens blank, so a model opened with it skips the empty page */
 	gtk_stack_add_named(GTK_STACK(window->stack), gtk_box_new(GTK_ORIENTATION_VERTICAL, 0), "blank");
 	gtk_stack_add_named(GTK_STACK(window->stack), create_empty_page(), "empty");
 	gtk_stack_add_named(GTK_STACK(window->stack), window->error_page, "error");
-	gtk_stack_add_named(GTK_STACK(window->stack), create_view(window), "view");
+	gtk_stack_add_named(GTK_STACK(window->stack), create_view(window), VIEW_PAGE);
 	gtk_stack_set_visible_child_name(GTK_STACK(window->stack), "blank");
 	GtkWidget *toolbar = adw_toolbar_view_new();
 	adw_toolbar_view_add_top_bar(ADW_TOOLBAR_VIEW(toolbar), create_header(window));
@@ -519,6 +691,17 @@ static void free_window(gpointer data) {
 }
 
 
+/* A narrow window keeps the title readable by folding the view switches into one menu and shortening the timeline */
+static void add_narrow_layout(Window *window) {
+	AdwBreakpoint *narrow = adw_breakpoint_new(adw_breakpoint_condition_parse(NARROW_WINDOW));
+	adw_breakpoint_add_setters(narrow, G_OBJECT(window->switch_group), "visible", FALSE,
+		G_OBJECT(window->view_menu_button), "visible", TRUE,
+		G_OBJECT(window->timeline), "width-request", NARROW_TIMELINE_WIDTH, NULL);
+	adw_application_window_add_breakpoint(ADW_APPLICATION_WINDOW(window->window), narrow);
+	gtk_widget_set_size_request(window->window, MINIMUM_WIDTH, MINIMUM_HEIGHT);
+}
+
+
 Window *create_window(GtkApplication *application) {
 	Window *window = g_new0(Window, 1);
 	WindowGeometry geometry;
@@ -530,6 +713,7 @@ Window *create_window(GtkApplication *application) {
 	apply_window_geometry(GTK_WINDOW(window->window), &geometry);
 	add_actions(window);
 	adw_application_window_set_content(ADW_APPLICATION_WINDOW(window->window), create_content(window));
+	add_narrow_layout(window);
 	add_viewer_keys(window->viewer, window->window);
 	add_file_drop(window->window, open_dropped_files, window);
 	g_signal_connect(window->window, "close-request", G_CALLBACK(close_window), window);
@@ -545,7 +729,7 @@ GtkWindow *get_gtk_window(Window *window) {
 static gboolean fade_in_empty_page(gpointer data) {
 	Window *window = data;
 	if (!window->is_started)
-		gtk_stack_set_visible_child_name(GTK_STACK(window->stack), "empty");
+		show_page(window, "empty", gtk_stack_get_transition_type(GTK_STACK(window->stack)));
 	return G_SOURCE_REMOVE;
 }
 

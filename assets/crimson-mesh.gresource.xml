@@ -3,10 +3,13 @@
 	<gresource prefix="/io/github/CrimsonOrg/CrimsonMesh">
 		<file>style.css</file>
 		<file>icons/scalable/apps/io.github.CrimsonOrg.CrimsonMesh.svg</file>
-		<file>icons/scalable/actions/crimson-background-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-frame-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-grid-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-look-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-model-broken-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-skeleton-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-textures-symbolic.svg</file>
+		<file>icons/scalable/actions/crimson-turntable-symbolic.svg</file>
 		<file>icons/scalable/actions/crimson-wireframe-symbolic.svg</file>
 	</gresource>
 </gresources>

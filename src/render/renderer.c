@@ -30,6 +30,15 @@
 #define GRID_SCALE_BASE 10
 #define MAJOR_GRID_EVERY 5
 #define MINOR_GRID_STRENGTH 0.45f
+/* The grid fades out around the model, from this share of the grid's reach out to the grid's edge, so the grid
+ * ends softly and the horizon and the view's edges stay clear, and the reach is a few model sizes but never under a
+ * few grid steps */
+#define GRID_FADE_START 0.3f
+#define GRID_FADE_MODEL_SIZES 2.5f
+#define GRID_FADE_LEAST_STEPS 4
+/* A soft shadow on the ground under the model, a little wider than the model and darkest in the middle */
+#define SHADOW_SPREAD 1.4f
+#define SHADOW_CORNERS 6
 /* Each grid step draws a line across each axis, two ends apiece */
 #define GRID_LINE_ENDS 4
 /* Joint matrices travel as a float texture, one texel per matrix column */
@@ -44,12 +53,12 @@ typedef struct {
 
 typedef struct {
 	GLuint program;
-	GLint view_projection, point_size, tint, is_point;
+	GLint view_projection, point_size, tint, is_point, fade_centre, fade_radii, fade_start;
 } LineShader;
 
 typedef struct {
 	GLuint program;
-	GLint top, bottom;
+	GLint top, bottom, vignette;
 } BackgroundShader;
 
 typedef struct {
@@ -76,8 +85,12 @@ struct Renderer {
 	CopyShader copy;
 	gboolean is_es;
 	GLuint empty_array;
+	/* The ground holds the grid's lines and then the shadow's two triangles */
 	GLuint grid_array, grid_buffer;
 	int grid_count;
+	/* Where the ground is under the model, how far the grid reaches before fading out and the shadow's size */
+	Vector3 ground_centre;
+	float grid_fade_radius, shadow_radius_x, shadow_radius_z;
 	GLuint skeleton_array, skeleton_buffer;
 	GLuint joint_texture;
 	/* Rows the joint texture holds now, and the largest texture side the card takes */
@@ -100,9 +113,11 @@ typedef struct {
 	gboolean is_view_relative, is_lit;
 } LightingPreset;
 
+/* A backdrop from top to bottom, with a vignette that darkens the backdrop's sides, so the model looks softly lit */
 typedef struct {
 	float top[RGB_CHANNELS], bottom[RGB_CHANNELS];
 	float grid[COLOUR_CHANNELS], wire[COLOUR_CHANNELS];
+	float vignette;
 } BackgroundPreset;
 
 static const LightingPreset LIGHTING_PRESETS[LIGHTING_COUNT] = {
@@ -125,14 +140,18 @@ static const LightingPreset LIGHTING_PRESETS[LIGHTING_COUNT] = {
 };
 
 static const BackgroundPreset BACKGROUND_PRESETS[BACKGROUND_COUNT] = {
-	[BACKGROUND_CHARCOAL] = {{0.17f, 0.18f, 0.2f}, {0.08f, 0.085f, 0.1f}, {1, 1, 1, 0.16f}, {0.31f, 0.78f, 0.78f, 0.7f}},
+	[BACKGROUND_CHARCOAL] = {{0.17f, 0.18f, 0.2f}, {0.08f, 0.085f, 0.1f}, {1, 1, 1, 0.16f}, {0.31f, 0.78f, 0.78f, 0.7f},
+		0.3f},
 	[BACKGROUND_MIDNIGHT] = {{0.086f, 0.137f, 0.165f}, {0.04f, 0.07f, 0.086f}, {0.31f, 0.78f, 0.78f, 0.22f},
-		{0.31f, 0.78f, 0.78f, 0.75f}},
-	[BACKGROUND_STUDIO] = {{0.55f, 0.57f, 0.6f}, {0.27f, 0.28f, 0.31f}, {1, 1, 1, 0.22f}, {0.08f, 0.1f, 0.12f, 0.7f}},
-	[BACKGROUND_LIGHT] = {{0.96f, 0.96f, 0.97f}, {0.82f, 0.84f, 0.87f}, {0, 0, 0, 0.16f}, {0.12f, 0.43f, 0.5f, 0.75f}},
-	[BACKGROUND_BLACK] = {{0, 0, 0}, {0, 0, 0}, {1, 1, 1, 0.14f}, {0.31f, 0.78f, 0.78f, 0.7f}},
+		{0.31f, 0.78f, 0.78f, 0.75f}, 0.35f},
+	[BACKGROUND_STUDIO] = {{0.55f, 0.57f, 0.6f}, {0.27f, 0.28f, 0.31f}, {1, 1, 1, 0.22f}, {0.08f, 0.1f, 0.12f, 0.7f},
+		0.3f},
+	[BACKGROUND_LIGHT] = {{0.96f, 0.96f, 0.97f}, {0.82f, 0.84f, 0.87f}, {0, 0, 0, 0.16f}, {0.12f, 0.43f, 0.5f, 0.75f},
+		0.1f},
+	[BACKGROUND_BLACK] = {{0, 0, 0}, {0, 0, 0}, {1, 1, 1, 0.14f}, {0.31f, 0.78f, 0.78f, 0.7f}, 0},
 };
 
+static const float SHADOW_TINT[4] = {0, 0, 0, 0.42f};
 /* Magenta shows up on nearly any model, and the dark rim keeps joints visible on light ones */
 static const float SKELETON_COLOUR[4] = {1, 0.42f, 0.84f, 1};
 static const float JOINT_RIM[4] = {0.05f, 0.02f, 0.04f, 0.85f};
@@ -230,34 +249,37 @@ static const char *LINE_VERTEX =
 	"uniform mat4 view_projection;\n"
 	"uniform float point_size;\n"
 	"out vec4 line_colour;\n"
+	"out vec3 line_place;\n"
 	"void main() {\n"
 	"	line_colour = colour;\n"
+	"	line_place = position;\n"
 	"	gl_PointSize = point_size;\n"
 	"	gl_Position = view_projection * vec4(position, 1.0);\n"
 	"}\n";
 
+/* Shapes on the ground, the grid and the shadow, fade out across the ground from a centre, over an ellipse with the
+ * given radii, and other lines draw in full */
 static const char *LINE_FRAGMENT =
 	"in vec4 line_colour;\n"
+	"in vec3 line_place;\n"
 	"uniform vec4 tint;\n"
 	"uniform bool is_point;\n"
+	"uniform vec3 fade_centre;\n"
+	"uniform vec2 fade_radii;\n"
+	"uniform float fade_start;\n"
 	"out vec4 result;\n"
 	"void main() {\n"
 	"	if (is_point && length(gl_PointCoord - vec2(0.5)) > 0.5)\n"
 	"		discard;\n"
-	"	result = line_colour * tint;\n"
+	"	float strength = 1.0;\n"
+	"	if (fade_radii.x > 0.0)\n"
+	"		strength -= smoothstep(fade_start, 1.0, length((line_place.xz - fade_centre.xz) / fade_radii));\n"
+	"	result = line_colour * tint * vec4(1.0, 1.0, 1.0, strength);\n"
 	"}\n";
 
-/* One triangle larger than the screen, coloured from top to bottom */
-static const char *BACKGROUND_VERTEX =
-	"out float height;\n"
-	"void main() {\n"
-	"	vec2 corner = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
-	"	height = corner.y * 0.5;\n"
-	"	gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);\n"
-	"}\n";
-
-/* Copies the resolved frame into the area's own buffer, whatever format that buffer has */
-static const char *COPY_VERTEX =
+/* One triangle larger than the screen, with place running from 0 to 1 across the screen, for the background and the
+ * copy */
+static const char *SCREEN_VERTEX =
 	"out vec2 place;\n"
 	"void main() {\n"
 	"	vec2 corner = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));\n"
@@ -265,20 +287,29 @@ static const char *COPY_VERTEX =
 	"	gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);\n"
 	"}\n";
 
+/* Copies the resolved frame into the area's own buffer, whatever format that buffer has, and always opaque, since
+ * blended lines lower the frame's alpha and the window's colour would show through the lines */
 static const char *COPY_FRAGMENT =
 	"in vec2 place;\n"
 	"uniform sampler2D image;\n"
 	"out vec4 result;\n"
 	"void main() {\n"
-	"	result = texture(image, place);\n"
+	"	result = vec4(texture(image, place).rgb, 1.0);\n"
 	"}\n";
 
+/* The colour runs from the bottom colour halfway to the top colour, so the top edge meets a dark title bar softly,
+ * and the vignette darkens the sides more than the top and bottom */
 static const char *BACKGROUND_FRAGMENT =
-	"in float height;\n"
+	"const vec2 VIGNETTE_SHAPE = vec2(2.0, 1.0);\n"
+	"in vec2 place;\n"
 	"uniform vec3 top, bottom;\n"
+	"uniform float vignette;\n"
 	"out vec4 result;\n"
 	"void main() {\n"
-	"	result = vec4(mix(bottom, top, clamp(height, 0.0, 1.0)), 1.0);\n"
+	"	vec3 colour = mix(bottom, top, clamp(place.y * 0.5, 0.0, 1.0));\n"
+	"	vec2 from_centre = (place - vec2(0.5)) * VIGNETTE_SHAPE;\n"
+	"	colour *= 1.0 - vignette * dot(from_centre, from_centre);\n"
+	"	result = vec4(colour, 1.0);\n"
 	"}\n";
 
 
@@ -338,9 +369,9 @@ static gboolean create_shaders(Renderer *renderer, GError **error) {
 	gboolean is_es = renderer->is_es;
 	surface->program = link_program(SURFACE_VERTEX, SURFACE_FRAGMENT, is_es, error);
 	renderer->lines.program = surface->program ? link_program(LINE_VERTEX, LINE_FRAGMENT, is_es, error) : 0;
-	renderer->background.program = renderer->lines.program ? link_program(BACKGROUND_VERTEX, BACKGROUND_FRAGMENT,
+	renderer->background.program = renderer->lines.program ? link_program(SCREEN_VERTEX, BACKGROUND_FRAGMENT,
 		is_es, error) : 0;
-	renderer->copy.program = renderer->background.program ? link_program(COPY_VERTEX, COPY_FRAGMENT, is_es, error)
+	renderer->copy.program = renderer->background.program ? link_program(SCREEN_VERTEX, COPY_FRAGMENT, is_es, error)
 		: 0;
 	if (!renderer->copy.program)
 		return FALSE;
@@ -367,8 +398,12 @@ static gboolean create_shaders(Renderer *renderer, GError **error) {
 	renderer->lines.point_size = glGetUniformLocation(renderer->lines.program, "point_size");
 	renderer->lines.tint = glGetUniformLocation(renderer->lines.program, "tint");
 	renderer->lines.is_point = glGetUniformLocation(renderer->lines.program, "is_point");
+	renderer->lines.fade_centre = glGetUniformLocation(renderer->lines.program, "fade_centre");
+	renderer->lines.fade_radii = glGetUniformLocation(renderer->lines.program, "fade_radii");
+	renderer->lines.fade_start = glGetUniformLocation(renderer->lines.program, "fade_start");
 	renderer->background.top = glGetUniformLocation(renderer->background.program, "top");
 	renderer->background.bottom = glGetUniformLocation(renderer->background.program, "bottom");
+	renderer->background.vignette = glGetUniformLocation(renderer->background.program, "vignette");
 	renderer->copy.image = glGetUniformLocation(renderer->copy.program, "image");
 	return TRUE;
 }
@@ -463,14 +498,34 @@ void free_renderer(Renderer *renderer) {
 }
 
 
-/* Twenty lines each way, with stronger lines at each 5th, sized to the power of ten above the model */
-static void build_grid(Renderer *renderer, const Model *model) {
+/* Two triangles under the model, wide enough for the shadow's fade to reach nothing at their edges */
+static void add_shadow(Renderer *renderer, GArray *vertices, Vector3 centre) {
+	float x = renderer->shadow_radius_x, z = renderer->shadow_radius_z;
+	LineVertex corners[SHADOW_CORNERS] = {
+		{{centre.x - x, centre.y, centre.z - z}, {1, 1, 1, 1}}, {{centre.x + x, centre.y, centre.z - z}, {1, 1, 1, 1}},
+		{{centre.x + x, centre.y, centre.z + z}, {1, 1, 1, 1}}, {{centre.x - x, centre.y, centre.z - z}, {1, 1, 1, 1}},
+		{{centre.x + x, centre.y, centre.z + z}, {1, 1, 1, 1}}, {{centre.x - x, centre.y, centre.z + z}, {1, 1, 1, 1}},
+	};
+	g_array_append_vals(vertices, corners, SHADOW_CORNERS);
+}
+
+
+/* Twenty lines each way, with stronger lines at each 5th, sized to the power of ten above the model's largest side, so
+ * a tall model stands on as wide a grid as a long one, then the shadow */
+static void build_ground(Renderer *renderer, const Model *model) {
 	Vector3 size = subtract_vectors(model->maximum, model->minimum);
-	float extent = powf(GRID_SCALE_BASE, ceilf(log10f(fmaxf(fmaxf(size.x, size.z), SMALLEST_SIZE))));
+	float largest = fmaxf(fmaxf(fmaxf(size.x, size.y), size.z), SMALLEST_SIZE);
+	float extent = powf(GRID_SCALE_BASE, ceilf(log10f(largest)));
 	float step = extent * 2 / GRID_LINES;
 	float centre_x = roundf((model->minimum.x + model->maximum.x) / 2 / step) * step;
 	float centre_z = roundf((model->minimum.z + model->maximum.z) / 2 / step) * step;
 	float ground = model->minimum.y;
+	Vector3 middle = scale_vector(add_vectors(model->minimum, model->maximum), 0.5f);
+	renderer->ground_centre = make_vector(middle.x, ground, middle.z);
+	float reach = get_vector_length(size) * GRID_FADE_MODEL_SIZES;
+	renderer->grid_fade_radius = fminf(fmaxf(reach, step * GRID_FADE_LEAST_STEPS), extent);
+	renderer->shadow_radius_x = fmaxf(size.x / 2 * SHADOW_SPREAD, SMALLEST_SIZE);
+	renderer->shadow_radius_z = fmaxf(size.z / 2 * SHADOW_SPREAD, SMALLEST_SIZE);
 	GArray *vertices = g_array_new(FALSE, FALSE, sizeof(LineVertex));
 	for (int line = -GRID_LINES / 2; line <= GRID_LINES / 2; line++) {
 		float strength = line % MAJOR_GRID_EVERY == 0 ? 1.0f : MINOR_GRID_STRENGTH;
@@ -484,6 +539,7 @@ static void build_grid(Renderer *renderer, const Model *model) {
 		g_array_append_vals(vertices, ends, GRID_LINE_ENDS);
 	}
 	renderer->grid_count = (int)vertices->len;
+	add_shadow(renderer, vertices, renderer->ground_centre);
 	glBindBuffer(GL_ARRAY_BUFFER, renderer->grid_buffer);
 	glBufferData(GL_ARRAY_BUFFER, vertices->len * sizeof(LineVertex), vertices->data, GL_STATIC_DRAW);
 	g_array_unref(vertices);
@@ -498,7 +554,7 @@ void set_renderer_model(Renderer *renderer, const Model *model) {
 		return;
 	renderer->meshes = g_new0(MeshBuffers, model->meshes->len);
 	renderer->textures = g_new0(GLuint, MAX(model->textures->len, 1));
-	build_grid(renderer, model);
+	build_ground(renderer, model);
 }
 
 
@@ -624,6 +680,7 @@ static void draw_background(Renderer *renderer, const BackgroundPreset *preset) 
 	glUseProgram(renderer->background.program);
 	glUniform3fv(renderer->background.top, 1, preset->top);
 	glUniform3fv(renderer->background.bottom, 1, preset->bottom);
+	glUniform1f(renderer->background.vignette, preset->vignette);
 	glBindVertexArray(renderer->empty_array);
 	glDrawArrays(GL_TRIANGLES, 0, TRIANGLE_CORNERS);
 }
@@ -757,6 +814,32 @@ static void use_line_shader(const Renderer *renderer, const RenderFrame *frame, 
 	glUniform1f(renderer->lines.point_size, point_size);
 	glUniform4fv(renderer->lines.tint, 1, tint);
 	glUniform1i(renderer->lines.is_point, FALSE);
+	glUniform2f(renderer->lines.fade_radii, 0, 0);
+}
+
+
+static void fade_on_ground(const Renderer *renderer, float radius_x, float radius_z, float start) {
+	Vector3 centre = renderer->ground_centre;
+	glUniform3f(renderer->lines.fade_centre, centre.x, centre.y, centre.z);
+	glUniform2f(renderer->lines.fade_radii, radius_x, radius_z);
+	glUniform1f(renderer->lines.fade_start, start);
+}
+
+
+/* The shadow lies on the ground with the grid, under the model and seen only from above */
+static void draw_shadow(Renderer *renderer, const RenderFrame *frame) {
+	gboolean is_wanted = frame->options->shows_grid && renderer->model->triangle_count > 0;
+	if (!is_wanted || renderer->grid_count == 0 || frame->eye.y <= renderer->ground_centre.y)
+		return;
+	use_line_shader(renderer, frame, 1, SHADOW_TINT);
+	fade_on_ground(renderer, renderer->shadow_radius_x, renderer->shadow_radius_z, 0);
+	glEnable(GL_DEPTH_TEST);
+	glDepthMask(GL_FALSE);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glBindVertexArray(renderer->grid_array);
+	glDrawArrays(GL_TRIANGLES, renderer->grid_count, SHADOW_CORNERS);
+	glDepthMask(GL_TRUE);
 }
 
 
@@ -764,6 +847,7 @@ static void draw_grid(Renderer *renderer, const RenderFrame *frame) {
 	if (!frame->options->shows_grid || renderer->grid_count == 0)
 		return;
 	use_line_shader(renderer, frame, 1, BACKGROUND_PRESETS[frame->options->background].grid);
+	fade_on_ground(renderer, renderer->grid_fade_radius, renderer->grid_fade_radius, GRID_FADE_START);
 	glEnable(GL_DEPTH_TEST);
 	glDepthMask(GL_FALSE);
 	glEnable(GL_BLEND);
@@ -839,6 +923,7 @@ void draw_renderer(Renderer *renderer, const RenderFrame *frame) {
 	glClear(GL_DEPTH_BUFFER_BIT);
 	draw_background(renderer, &BACKGROUND_PRESETS[frame->options->background]);
 	if (renderer->model) {
+		draw_shadow(renderer, frame);
 		draw_surfaces(renderer, frame);
 		draw_grid(renderer, frame);
 		draw_skeleton(renderer, frame);
