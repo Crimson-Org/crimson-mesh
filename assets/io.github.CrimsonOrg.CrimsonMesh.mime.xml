@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Model formats Crimson Mesh opens that the desktop has no file type for, named as other model viewers name them -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+	<mime-type type="application/vnd.autodesk.fbx">
+		<comment>FBX 3D model</comment>
+		<generic-icon name="image-x-generic"/>
+		<magic>
+			<match type="string" value="Kaydara FBX Binary" offset="0"/>
+			<match type="string" value="; FBX" offset="0"/>
+		</magic>
+		<glob pattern="*.fbx"/>
+	</mime-type>
+	<mime-type type="model/vnd.collada+xml">
+		<comment>COLLADA 3D model</comment>
+		<sub-class-of type="application/xml"/>
+		<generic-icon name="image-x-generic"/>
+		<root-XML namespaceURI="http://www.collada.org/2005/11/COLLADASchema" localName="COLLADA"/>
+		<root-XML namespaceURI="http://www.collada.org/2008/03/COLLADASchema" localName="COLLADA"/>
+		<glob pattern="*.dae"/>
+	</mime-type>
+	<mime-type type="model/x-ply">
+		<comment>PLY 3D model</comment>
+		<generic-icon name="image-x-generic"/>
+		<magic>
+			<match type="string" value="ply\n" offset="0"/>
+			<match type="string" value="ply\r\n" offset="0"/>
+		</magic>
+		<glob pattern="*.ply"/>
+	</mime-type>
+</mime-info>
