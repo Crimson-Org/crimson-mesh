@@ -3,9 +3,8 @@
 </p>
 
 <h1 align="center">Crimson Mesh</h1>
-<p align="center">A Linux 3D model viewer that plays skeletons and animations, not just meshes.<br>
-Opens <a href="https://www.khronos.org/gltf/">glTF</a>, FBX, OBJ, STL and many other formats.<br>
-Look around, then fly through the model.</p>
+<p align="center">A 3D model viewer for Linux, with skeletons and animations.<br>
+Open <a href="https://www.khronos.org/gltf/">glTF</a>, FBX, OBJ, STL and many other formats, then orbit or fly through the model.</p>
 
 <p align="center">
   <a href="https://gtk.org">
@@ -33,14 +32,6 @@ A model sent by a friend or found online should open with a double click, withou
 Crimson Mesh shows the model with textures, lighting and animation at once.
 
 ## About
-
-### Formats
-
-glTF, FBX, OBJ, Collada, STL, PLY, 3DS and many older formats open with their textures and colours.
-
-### Looking around
-
-Orbit, pan and zoom with the mouse, or fly through the model.
 
 ### How a model is built
 
